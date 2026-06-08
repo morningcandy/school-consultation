@@ -210,6 +210,18 @@ body{font-family:var(--sans);background:var(--bg);color:var(--text);min-height:1
 .modal-input:focus{border-color:var(--accent);background:var(--surface)}
 .modal-actions{display:flex;gap:7px;justify-content:flex-end;margin-top:14px}
 
+/* FILTER BAR */
+.filter-bar{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:12px;align-items:center}
+.filter-label{font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.4px;margin-right:3px;white-space:nowrap}
+.filter-btn{padding:4px 10px;border-radius:20px;font-size:11px;font-weight:500;font-family:var(--sans);border:1px solid var(--border-strong);background:var(--surface2);color:var(--text2);cursor:pointer;transition:all .12s;white-space:nowrap}
+.filter-btn:hover{background:var(--accent-bg);border-color:var(--accent-light);color:var(--accent)}
+.filter-btn.active{background:var(--accent);border-color:var(--accent);color:white}
+.filter-sep{width:1px;height:16px;background:var(--border-strong);flex-shrink:0;margin:0 3px}
+/* CAREER SELECT */
+.career-sel-btn{padding:5px 12px;border-radius:20px;font-size:11px;font-weight:500;font-family:var(--sans);border:1px solid var(--border-strong);background:var(--surface2);color:var(--text2);cursor:pointer;transition:all .12s;white-space:nowrap}
+.career-sel-btn:hover{background:var(--purple-bg);border-color:#C3B5F0;color:var(--purple)}
+.career-sel-btn.active{background:var(--purple);border-color:var(--purple);color:white}
+.kw-chip.career-match{background:var(--purple-bg)!important;border-color:#C3B5F0!important;color:var(--purple)!important;font-weight:700!important}
 .spinner{width:13px;height:13px;border:2px solid var(--border-strong);border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite;display:inline-block}
 @keyframes spin{to{transform:rotate(360deg)}}
 ::-webkit-scrollbar{width:4px}
@@ -372,7 +384,7 @@ const CAREER_MAP = [
 
 // ── STATE ──────────────────────────────────────
 const state = {
-  students:     {},   // name -> { mock, neis, neisDetail, setech, setechSubs, memo, num }
+  students:     {},   // name -> { mock, neis, neisDetail, setech, setechSubs, memo, num, careerKey }
   neisData:     {},
   setechData:   {},
   uploadedFiles:{ roster:null, mock:[], neis:null, setech:null },
@@ -380,6 +392,8 @@ const state = {
   aiCache:      {},
   selectedName: null,
   currentTab:   'score',
+  scoreFilter:  { year: null, month: null },  // null = 전체
+  neisFilter:   null,                          // null = 전체, 또는 eduCat 문자열
 };
 
 // ── SVG 차트 헬퍼 ─────────────────────────────
@@ -556,6 +570,8 @@ function parseMockRows(rows, filename, headerIdxOverride) {
   const header = rows[hi].map(c => String(c));
   const monthMatch = filename.match(/(\d{2})_회|(\d+)월/);
   const month = monthMatch ? (monthMatch[1]||monthMatch[2])+'월' : (filename.replace(/[^0-9]/g,'').slice(0,2)||'?')+'월';
+  const yearMatch = filename.match(/20(\d{2})년?|(\d{2})학년도/);
+  const year = yearMatch ? '20'+(yearMatch[1]||yearMatch[2]) : null;
   const nameIdx = header.findIndex(h => h.includes('이름'));
   const numIdx  = header.findIndex(h => h.includes('번호'));
   const koIdx   = header.findIndex(h => h.includes('국어'));
@@ -583,7 +599,7 @@ function parseMockRows(rows, filename, headerIdxOverride) {
       총점: +row[totIdx]||0,
     };
     if (scores.총점===0) scores.총점 = scores.국어+scores.수학+scores.영어+scores.한국사+scores.탐구1+scores.탐구2;
-    if (existing) Object.assign(existing, { month, scores }); else state.students[name].mock.push({ month, scores });
+    if (existing) Object.assign(existing, { month, year, scores }); else state.students[name].mock.push({ month, year, scores });
     if (state.memos[name]) state.students[name].memo = state.memos[name];
     count++;
   });
@@ -881,121 +897,163 @@ function renderContent() {
   else if (t==='memo') renderMemo(c, name);
 }
 
+// ── 필터 조작 헬퍼 ───────────────────────────
+function setScoreFilter(key, val) {
+  state.scoreFilter[key] = val;
+  renderContent();
+}
+function setNeisFilter(val) {
+  state.neisFilter = val;
+  renderContent();
+}
+function selectCareer(name, key) {
+  const stu = state.students[name];
+  if (!stu) return;
+  stu.careerKey = (stu.careerKey === key) ? null : key;
+  renderContent();
+}
+
 // ── 1. 종합 성적 분석 탭 ─────────────────────
 function renderScore(content, name) {
-  const mocks = getMockSorted(name);
-  const stu   = state.students[name];
-  const hasMock = mocks.length > 0;
-  const hasNeis = stu.neis && Object.keys(stu.neis).length > 0;
+  const allMocks = getMockSorted(name);
+  const stu      = state.students[name];
+  const hasNeis  = stu.neis && Object.keys(stu.neis).length > 0;
 
-  if (!hasMock && !hasNeis) {
+  if (!allMocks.length && !hasNeis) {
     content.innerHTML = '<div class="empty-state"><div class="empty-icon">📊</div><div class="empty-title">성적 데이터 없음</div><div class="empty-body">모의고사 또는 내신 파일을 업로드해주세요</div></div>';
     return;
   }
 
+  // 학년/고사 필터 바 구성
+  const uniqYears  = [...new Set(allMocks.map(m => m.year).filter(Boolean))].sort();
+  const uniqMonths = [...new Set(allMocks.map(m => m.month))].sort((a,b) => parseInt(a)-parseInt(b));
+
+  // 필터 적용
+  let mocks = allMocks;
+  if (state.scoreFilter.year)  mocks = mocks.filter(m => m.year  === state.scoreFilter.year);
+  if (state.scoreFilter.month) mocks = mocks.filter(m => m.month === state.scoreFilter.month);
+
   let html = '';
 
-  // ① 종합 현황 요약
+  // ① 필터 바 (데이터가 있을 때만)
+  if (allMocks.length > 0) {
+    let filterHtml = '<div class="filter-bar">';
+    if (uniqYears.length > 1) {
+      filterHtml += '<span class="filter-label">학년도</span>';
+      filterHtml += '<button class="filter-btn'+(state.scoreFilter.year===null?' active':'')+'" onclick="setScoreFilter(\'year\',null)">전체</button>';
+      uniqYears.forEach(y => {
+        const active = state.scoreFilter.year===y ? ' active' : '';
+        filterHtml += '<button class="filter-btn'+active+'" onclick="setScoreFilter(\'year\',\''+y+'\')">'+y+'</button>';
+      });
+      filterHtml += '<div class="filter-sep"></div>';
+    }
+    if (uniqMonths.length > 1) {
+      filterHtml += '<span class="filter-label">고사</span>';
+      filterHtml += '<button class="filter-btn'+(state.scoreFilter.month===null?' active':'')+'" onclick="setScoreFilter(\'month\',null)">전체</button>';
+      uniqMonths.forEach(mo => {
+        const active = state.scoreFilter.month===mo ? ' active' : '';
+        filterHtml += '<button class="filter-btn'+active+'" onclick="setScoreFilter(\'month\',\''+mo+'\')">'+mo+'</button>';
+      });
+    }
+    filterHtml += '</div>';
+    if (uniqYears.length > 1 || uniqMonths.length > 1) html += filterHtml;
+  }
+
+  const hasMock = mocks.length > 0;
   const last  = hasMock ? mocks[mocks.length-1] : null;
   const prev  = hasMock && mocks.length>1 ? mocks[mocks.length-2] : null;
   const rk    = rankIn(name);
 
-  // 내신 대표 등급 (보유 과목 평균)
+  // ② 종합 현황 요약
   let neisAvgText = '-';
   if (hasNeis) {
     const grades = Object.values(stu.neis).map(g => GRADE_TO_NUM[g]).filter(Boolean);
     if (grades.length) {
       const avg = grades.reduce((a,b)=>a+b,0)/grades.length;
-      const labels = ['','E','D','C','B','A'];
-      neisAvgText = labels[Math.round(avg)] || '-';
+      neisAvgText = ['','E','D','C','B','A'][Math.round(avg)] || '-';
     }
   }
-
   const statCells = [];
   if (hasMock) {
-    statCells.push({ label:'최근 총점', value: last.scores.총점.toFixed(1), sub: last.month, color:'var(--accent)' });
+    statCells.push({ label:'최근 총점', value: last.scores.총점.toFixed(1), sub: last.month+(last.year?' ('+last.year+')':''), color:'var(--accent)' });
     if (rk) statCells.push({ label:'반 순위', value: rk.rank+'위', sub: rk.total+'명 중 상위 '+rk.pct+'%', color: rk.pct<=30?'var(--green)':rk.pct<=60?'var(--accent)':'var(--amber)' });
     if (prev) {
       const diff = (last.scores.총점 - prev.scores.총점).toFixed(1);
       statCells.push({ label:'전회 대비', value: (diff>0?'+':'')+diff, sub: prev.month+' → '+last.month, color: diff>0?'var(--green)':diff<0?'var(--red)':'var(--text3)' });
     }
   }
-  if (hasNeis) {
-    statCells.push({ label:'내신 대표등급', value: neisAvgText, sub: '보유 과목 평균 등급', color:'var(--purple)' });
-  }
+  if (hasNeis) statCells.push({ label:'내신 대표등급', value: neisAvgText, sub: '보유 과목 평균 등급', color:'var(--purple)' });
 
   if (statCells.length) {
     const cols = 'stat-row-' + Math.min(statCells.length, 4);
-    const cells = statCells.map(c =>
-      '<div class="stat-cell"><div class="stat-label">'+c.label+'</div>'
-      +'<div class="stat-value" style="color:'+c.color+'">'+c.value+'</div>'
-      +'<div class="stat-sub">'+c.sub+'</div></div>'
-    ).join('');
-    html += '<div class="card">'+cardHd('종합 현황')+'<div class="card-body"><div class="stat-row '+cols+'">'+cells+'</div></div></div>';
+    html += '<div class="card">'+cardHd('종합 현황')+'<div class="card-body"><div class="stat-row '+cols+'">'
+      +statCells.map(c=>'<div class="stat-cell"><div class="stat-label">'+c.label+'</div><div class="stat-value" style="color:'+c.color+'">'+c.value+'</div><div class="stat-sub">'+c.sub+'</div></div>').join('')
+      +'</div></div></div>';
   }
 
-  // ② 모의고사 총점 추이 선 그래프
+  // ③ 모의고사 총점 추이 그래프
   if (hasMock && mocks.length >= 2) {
-    const linePoints = mocks.map(m => ({ x: m.month, y: Math.round(m.scores.총점*10)/10 }));
-    const chartHtml = svgLine(linePoints, '#2D5BE3', 130);
-    html += '<div class="card">'+cardHd('모의고사 총점 추이')+'<div class="card-body">'+chartHtml+'</div></div>';
+    const linePoints = mocks.map(m => ({ x: m.month+(m.year?'('+m.year.slice(2)+')':''), y: Math.round(m.scores.총점*10)/10 }));
+    html += '<div class="card">'+cardHd('모의고사 총점 추이')+'<div class="card-body">'+svgLine(linePoints,'#2D5BE3',130)+'</div></div>';
   }
 
-  // ③ 과목별 점수 (최근 회차)
+  // ④ 고사별 과목 점수 카드 (필터된 회차 각각 표시)
   if (hasMock) {
     const subjects = ['국어','수학','영어','한국사','탐구1','탐구2'];
     const maxes    = { 국어:100, 수학:100, 영어:100, 한국사:50, 탐구1:50, 탐구2:50 };
+    // 선택된 회차가 1개면 상세, 여러 개면 최근 것만 상세 표시
+    const target = mocks[mocks.length-1];
+    const targetPrev = mocks.length>1 ? mocks[mocks.length-2] : null;
     const scoreGrid = subjects.map(s => {
-      const lv=last.scores[s]||0, pv=prev?prev.scores[s]||0:null, diff=prev?lv-pv:null;
+      const lv=target.scores[s]||0, pv=targetPrev?targetPrev.scores[s]||0:null, diff=targetPrev?lv-pv:null;
       const pct=maxes[s]?Math.round((lv/maxes[s])*100):0;
       const col=pct>=80?'var(--green)':pct>=60?'var(--accent)':pct>=40?'var(--amber)':'var(--red)';
       const lbl=s==='탐구1'?'탐구①':s==='탐구2'?'탐구②':s;
       return '<div class="score-cell"><div class="score-subj">'+lbl+'</div>'
         +'<div class="score-val" style="color:'+col+'">'+lv+'</div>'
         +'<div class="score-diff">'+(diff!==null?'<span class="'+diffClass(diff)+'">'+diffText(diff)+'</span>':'')
-        +(prev?'<span style="font-size:9px;color:var(--text3)"> '+pv+'</span>':'')+'</div></div>';
+        +(targetPrev?'<span style="font-size:9px;color:var(--text3)"> '+pv+'</span>':'')+'</div></div>';
     }).join('');
     const chipRight=(rk?'<span class="chip chip-blue">반 '+rk.rank+'위</span>':'')
-      +(prev?'<span class="chip '+(last.scores.총점>=prev.scores.총점?'chip-green':'chip-red')+'">'
-        +(last.scores.총점>=prev.scores.총점?'▲':'▼')+Math.abs(+(last.scores.총점-prev.scores.총점).toFixed(1))+'점</span>':'');
-    html += '<div class="card">'+cardHd('과목별 점수 ('+last.month+')', chipRight)+'<div class="card-body"><div class="score-grid">'+scoreGrid+'</div></div></div>';
+      +(targetPrev?'<span class="chip '+(target.scores.총점>=targetPrev.scores.총점?'chip-green':'chip-red')+'">'
+        +(target.scores.총점>=targetPrev.scores.총점?'▲':'▼')+Math.abs(+(target.scores.총점-targetPrev.scores.총점).toFixed(1))+'점</span>':'');
+    html += '<div class="card">'+cardHd('과목별 점수 ('+target.month+(target.year?' '+target.year:'')+')', chipRight)
+      +'<div class="card-body"><div class="score-grid">'+scoreGrid+'</div></div></div>';
   }
 
-  // ④ 과목별 추이 멀티라인 그래프 (3회 이상일 때)
+  // ⑤ 과목별 추이 멀티라인 그래프
   if (hasMock && mocks.length >= 2) {
     const subjs = ['국어','수학','영어','한국사'];
     const colors = ['#2D5BE3','#1A7F5A','#9B5A00','#C0392B'];
     const seriesList = subjs.map((s,i) => ({
       label: s, color: colors[i],
-      points: mocks.map(m => ({ x: m.month, y: m.scores[s]||0 }))
+      points: mocks.map(m => ({ x: m.month+(m.year?'('+m.year.slice(2)+')':''), y: m.scores[s]||0 }))
     }));
-    const legendHtml = subjs.map((s,i) =>
-      '<div class="leg"><div class="leg-sq" style="background:'+colors[i]+'"></div>'+s+'</div>'
-    ).join('');
+    const legendHtml = subjs.map((s,i)=>'<div class="leg"><div class="leg-sq" style="background:'+colors[i]+'"></div>'+s+'</div>').join('');
     html += '<div class="card">'+cardHd('과목별 점수 추이','<div class="legend">'+legendHtml+'</div>')
-      +'<div class="card-body">'+svgMultiLine(seriesList, 140)+'</div></div>';
+      +'<div class="card-body">'+svgMultiLine(seriesList,140)+'</div></div>';
   }
 
-  // ⑤ 전체 회차 데이터 테이블
+  // ⑥ 전체 회차 데이터 테이블
   if (hasMock) {
     const subjects = ['국어','수학','영어','한국사','탐구1','탐구2'];
-    const trendTable = '<table class="rank-table"><thead><tr><th>회차</th>'
+    const trendTable = '<table class="rank-table"><thead><tr><th>학년도</th><th>회차</th>'
       +subjects.map(s=>'<th>'+s+'</th>').join('')+'<th>총점</th></tr></thead><tbody>'
-      +mocks.map(m=>'<tr><td style="color:var(--text2);font-size:11px">'+m.month+'</td>'
+      +mocks.map(m=>'<tr><td style="color:var(--text3);font-size:10px">'+(m.year||'-')+'</td>'
+        +'<td style="color:var(--text2);font-size:11px">'+m.month+'</td>'
         +subjects.map(s=>'<td>'+(m.scores[s]||0)+'</td>').join('')
         +'<td style="font-weight:600;color:var(--accent)">'+m.scores.총점.toFixed(1)+'</td></tr>').join('')
       +'</tbody></table>';
-    html += '<div class="card">'+cardHd('전 회차 성적 데이터')+'<div class="card-body">'+trendTable+'</div></div>';
+    html += '<div class="card">'+cardHd('전 회차 성적 데이터 ('+mocks.length+'회차)')+'<div class="card-body">'+trendTable+'</div></div>';
   }
 
-  // ⑥ 모의 + 내신 통합 비교 (둘 다 있을 때)
+  // ⑦ 모의 + 내신 통합 비교
   if (hasMock && hasNeis) {
     const SUBJ_MAP = { 국어:'국어', 수학:'수학', 영어:'영어' };
-    const rows = Object.entries(SUBJ_MAP).map(([mock_s, neis_s]) => {
-      const mockScore = last.scores[mock_s] || '-';
-      const g1 = stu.neis[neis_s+'1'] || '-';
-      const g2 = stu.neis[neis_s+'2'] || '-';
-      return '<tr><td style="font-weight:500;color:var(--text);text-align:left">'+mock_s+'</td>'
+    const rows = Object.entries(SUBJ_MAP).map(([ms, ns]) => {
+      const mockScore = last.scores[ms] || '-';
+      const g1 = stu.neis[ns+'1']||'-', g2 = stu.neis[ns+'2']||'-';
+      return '<tr><td style="font-weight:500;color:var(--text);text-align:left">'+ms+'</td>'
         +'<td>'+mockScore+'</td>'
         +'<td><span class="'+getGradeClass(g1)+'">'+g1+'</span></td>'
         +'<td><span class="'+getGradeClass(g2)+'">'+g2+'</span></td></tr>';
@@ -1022,12 +1080,29 @@ function renderNeis(content, name) {
 
   // ① 전 교과목 성취도 테이블 (neisDetail 기반)
   if (hasDetail) {
-    // 교과목별로 grouping
+    // 교과 대분류 목록 추출
+    const allCats = [...new Set(stu.neisDetail.map(d => d.eduCat).filter(Boolean))];
+
+    // 필터 바
+    if (allCats.length > 1) {
+      let filterHtml = '<div class="filter-bar"><span class="filter-label">교과</span>';
+      filterHtml += '<button class="filter-btn'+(state.neisFilter===null?' active':'')+'" onclick="setNeisFilter(null)">전체</button>';
+      allCats.forEach(cat => {
+        const active = state.neisFilter===cat ? ' active' : '';
+        filterHtml += '<button class="filter-btn'+active+'" onclick="setNeisFilter(\''+cat.replace(/'/g,"\\'")+'\')">'+(cat||'기타')+'</button>';
+      });
+      filterHtml += '</div>';
+      html += filterHtml;
+    }
+
+    // 교과목별로 grouping (필터 적용)
     const subjMap = {};
-    stu.neisDetail.forEach(d => {
-      if (!subjMap[d.subject]) subjMap[d.subject] = { eduCat: d.eduCat };
-      subjMap[d.subject][d.semester] = d.grade;
-    });
+    stu.neisDetail
+      .filter(d => state.neisFilter === null || d.eduCat === state.neisFilter)
+      .forEach(d => {
+        if (!subjMap[d.subject]) subjMap[d.subject] = { eduCat: d.eduCat };
+        subjMap[d.subject][d.semester] = d.grade;
+      });
 
     const tableRows = Object.entries(subjMap).map(([subj, data]) => {
       const g1 = data['1학기'] || '-';
@@ -1152,42 +1227,76 @@ function renderSetech(content, name) {
   }
 
   let html = '';
-  const keywords = extractKeywords(stu.setech);
+  const keywords     = extractKeywords(stu.setech);
   const careerMatches = matchCareer(keywords);
+  const selectedKey  = stu.careerKey || null;
 
-  // ① 핵심 키워드
+  // 선택된 진로의 키워드 집합
+  const selectedCareerKws = selectedKey
+    ? new Set((CAREER_MAP.find(c=>c.field===selectedKey)||{kws:[]}).kws)
+    : new Set();
+
+  // ① 진로 선택 패널
+  const careerBtns = CAREER_MAP.map(cm => {
+    const isActive = selectedKey === cm.field;
+    // 이 진로가 세특과 얼마나 매칭되는지
+    const matchCnt = careerMatches.find(c=>c.field===cm.field)?.matched.length || 0;
+    const badge = matchCnt > 0 ? ' <span style="font-size:9px;opacity:.8">('+matchCnt+')</span>' : '';
+    return '<button class="career-sel-btn'+(isActive?' active':'')+'" onclick="selectCareer(\''+name.replace(/'/g,"\\'")+'\',(\''+cm.field.replace(/'/g,"\\'")+'\'))">'
+      +cm.field+badge+'</button>';
+  }).join('');
+
+  html += '<div class="card">'+cardHd('진로 분야 선택', '<span style="font-size:10px;color:var(--text3)">클릭하면 관련 키워드가 하이라이트됩니다</span>')
+    +'<div class="card-body">'
+    +'<div style="display:flex;flex-wrap:wrap;gap:6px;padding:2px 0">'+careerBtns+'</div>'
+    +(selectedKey
+      ? '<div style="margin-top:10px;padding:8px 11px;background:var(--purple-bg);border-radius:var(--radius);font-size:11px;color:var(--purple);line-height:1.7">'
+        +'<strong>'+selectedKey+'</strong> 관련 키워드: '
+        +Array.from(selectedCareerKws).map(k=>'<span style="font-weight:600">'+k+'</span>').join(' · ')
+        +'</div>'
+      : '<div style="margin-top:8px;font-size:11px;color:var(--text3)">진로를 선택하면 세특 키워드에서 관련 단어가 강조됩니다. 숫자는 세특 내 매칭 키워드 수.</div>'
+    )
+    +'</div></div>';
+
+  // ② 핵심 키워드 (선택된 진로 키워드 하이라이트)
   if (keywords.length > 0) {
     const maxCnt = keywords[0].cnt;
     const chips = keywords.map((k,i) => {
-      const cls = i<3?'hi1':i<7?'hi2':i<12?'hi3':'';
+      // 선택된 진로 키워드와 매칭 여부
+      const isCareerMatch = selectedKey && [...selectedCareerKws].some(ck => k.word.includes(ck) || ck.includes(k.word));
+      let cls = isCareerMatch ? 'career-match' : (i<3?'hi1':i<7?'hi2':i<12?'hi3':'');
       const size = 10 + Math.round((k.cnt/maxCnt)*4);
       return '<span class="kw-chip '+cls+'" style="font-size:'+size+'px">'+k.word+'<span class="kw-cnt">'+k.cnt+'</span></span>';
     }).join('');
     html += '<div class="card">'+cardHd('핵심 키워드')
       +'<div class="card-body">'
-      +'<div style="font-size:10px;color:var(--text3);margin-bottom:8px">세특 텍스트에서 빈도 기반으로 추출 · 숫자는 등장 횟수</div>'
+      +'<div style="font-size:10px;color:var(--text3);margin-bottom:8px">빈도 기반 추출 · 숫자=등장 횟수'+(selectedKey?' · <span style="color:var(--purple);font-weight:600">보라색=선택 진로 관련</span>':'')+'</div>'
       +'<div class="kw-cloud">'+chips+'</div></div></div>';
   }
 
-  // ② 진로 연계 분석
+  // ③ 세특 기반 진로 연계 분석 (상위 5개)
   if (careerMatches.length > 0) {
     const careerRows = careerMatches.slice(0,5).map(cm => {
+      const isSelected = selectedKey === cm.field;
       const kwHtml = cm.matched.map(k=>'<span class="career-kw">'+k+'</span>').join('');
-      return '<div class="career-item">'
-        +'<div class="career-field">'+cm.field+' ('+cm.matched.length+'개)</div>'
+      return '<div class="career-item" style="'+(isSelected?'background:var(--purple-bg);margin:-1px -1px;padding:8px 11px;border-radius:var(--radius);':'')+'background:transparent">'
+        +'<div class="career-field">'+(isSelected?'<span style="color:var(--purple)">★ </span>':'')+cm.field+' ('+cm.matched.length+'개)</div>'
         +'<div class="career-kws">'+kwHtml+'</div></div>';
     }).join('');
-    html += '<div class="card">'+cardHd('진로 연계 분야')
+    html += '<div class="card">'+cardHd('세특 기반 진로 연계')
       +'<div class="card-body">'
-      +'<div style="font-size:10px;color:var(--text3);margin-bottom:8px">세특 키워드와 연계된 진로 분야 · 많이 매칭될수록 관련성 높음</div>'
+      +'<div style="font-size:10px;color:var(--text3);margin-bottom:8px">세특 키워드와 매칭된 진로 분야 · 많이 매칭될수록 관련성 높음</div>'
       +careerRows+'</div></div>';
   }
 
-  // ③ 교과목별 세특 (setechSubs 있는 경우)
+  // ④ 교과목별 세특 (setechSubs 있는 경우)
   if (stu.setechSubs && stu.setechSubs.length > 0) {
     const subjCards = stu.setechSubs.map(s => {
       const skws = extractKeywords(s.text).slice(0,10);
-      const skwHtml = skws.map(k=>'<span class="kw-chip" style="font-size:10px">'+k.word+'</span>').join('');
+      const skwHtml = skws.map(k => {
+        const isMatch = selectedKey && [...selectedCareerKws].some(ck => k.word.includes(ck) || ck.includes(k.word));
+        return '<span class="kw-chip '+(isMatch?'career-match':'')+'" style="font-size:10px">'+k.word+'</span>';
+      }).join('');
       return '<div style="margin-bottom:12px"><div style="font-size:11px;font-weight:600;color:var(--text2);margin-bottom:5px;text-transform:uppercase;letter-spacing:.4px">'+s.subject+'</div>'
         +'<div class="kw-cloud" style="margin-bottom:6px">'+skwHtml+'</div>'
         +'<div style="font-size:11px;line-height:1.7;color:var(--text);white-space:pre-wrap;max-height:120px;overflow-y:auto;background:var(--surface2);padding:8px;border-radius:8px">'+s.text.trim()+'</div></div>';
@@ -1195,7 +1304,7 @@ function renderSetech(content, name) {
     html += '<div class="card">'+cardHd('교과목별 세특')+'<div class="card-body">'+subjCards+'</div></div>';
   }
 
-  // ④ 전체 세특 원문 (접어두기)
+  // ⑤ 전체 세특 원문 (접어두기)
   if (stu.setech) {
     html += '<div class="card collapsed">'+cardHd('전체 세특 원문')
       +'<div class="card-body"><div style="font-size:11px;line-height:1.85;white-space:pre-wrap;max-height:400px;overflow-y:auto">'+stu.setech+'</div></div></div>';
