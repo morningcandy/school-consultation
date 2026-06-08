@@ -305,8 +305,10 @@ body{font-family:var(--sans);background:var(--bg);color:var(--text);min-height:1
         </div>
         <div style="font-size:11px;color:var(--text3);text-align:center;line-height:1.8">
           ⚡ 파일은 브라우저 내에서만 처리됩니다 · 서버 전송 없음<br>
-          내신·세특·모의고사 파일만 올려도 학생 명단 자동 생성
+          내신·세특·모의고사 파일만 올려도 학생 명단 자동 생성<br>
+          새로고침해도 데이터가 유지됩니다
         </div>
+        <button class="btn danger" style="font-size:11px" onclick="clearStorage()">🗑️ 전체 데이터 초기화</button>
       </div>
     </div>
 
@@ -608,38 +610,90 @@ function parseMockRows(rows, filename, headerIdxOverride) {
   updatePill('pill-mock','모의 '+getUniqMonths()+'회');
   updatePill('pill-roster','명단 '+Object.keys(state.students).length+'명');
   document.getElementById('card-mock').classList.add('done');
-  rebuildList(); updateFileStatus();
+  rebuildList(); updateFileStatus(); saveToStorage();
   showToast('✅ '+month+' 모의고사 로드 ('+count+'명)');
 }
 
 // ── NEIS PARSER ────────────────────────────────
 function parseNeisRows(rows, filename) {
-  rows.forEach(row => {
-    const r = row.map(c => String(c).trim());
-    // 성취도 열 찾기: A~E 단일 문자
-    const gradeIdx = r.findIndex(c => /^[A-E]$/.test(c));
-    const name = r[1];
-    if (!name || name.length<2 || name.length>5) return;
-    if (gradeIdx<0) return;
-    const grade   = r[gradeIdx];
-    const subject = r[5]||r[4]||'';
-    const eduCat  = r[4]||'';
-    const sem     = r[3]||'';
-    const year    = r[2]||'';
-    if (!grade || !subject) return;
+  // ① 헤더 행 탐색 (최대 15행)
+  let nameCol=-1, yearCol=-1, semCol=-1, eduCatCol=-1, subjCol=-1;
+  let rawCol=-1, gradeCol=-1, rankCol=-1;
+  let dataStart = 0;
 
-    // 기존 normalized 데이터 (6과목)
+  for (let i = 0; i < Math.min(15, rows.length); i++) {
+    const r = rows[i].map(c => String(c).trim());
+    const isHeader = r.some(c => c==='과목' || c==='성취도' || c.includes('원점수') || c==='석차등급');
+    if (isHeader) {
+      dataStart = i + 1;
+      r.forEach((c, ci) => {
+        if (c.includes('성명') || c==='이름')                         nameCol   = ci;
+        if ((c==='학년'||c.includes('학년'))&&!c.includes('도'))      yearCol   = ci;
+        if (c==='학기'||c.includes('학기'))                           semCol    = ci;
+        if (c==='교과'||c.includes('교과명')||c.includes('교과영역')) eduCatCol = ci;
+        if (c==='과목'||c.includes('과목명'))                         subjCol   = ci;
+        if (c.includes('원점수'))                                     rawCol    = ci;
+        if (c==='성취도'||(c.includes('성취도')&&!c.includes('수강')))gradeCol  = ci;
+        if (c==='석차등급'||(c==='등급'&&rankCol<0))                  rankCol   = ci;
+      });
+      break;
+    }
+  }
+  const headerFound = nameCol >= 0;
+
+  // ② 데이터 행 처리
+  rows.slice(dataStart).forEach(row => {
+    const r = row.map(c => String(c).trim());
+
+    let name, year, sem, eduCat, subject, rawScore, grade, rank;
+
+    if (headerFound) {
+      name     = r[nameCol]   || '';
+      year     = yearCol>=0   ? r[yearCol]   : '';
+      sem      = semCol>=0    ? r[semCol]    : '';
+      eduCat   = eduCatCol>=0 ? r[eduCatCol] : '';
+      subject  = subjCol>=0   ? r[subjCol]   : '';
+      rawScore = rawCol>=0    ? r[rawCol]    : '';
+      grade    = gradeCol>=0  ? r[gradeCol]  : (r.find(c => /^[A-E]$/.test(c)) || '');
+      rank     = rankCol>=0   ? r[rankCol]   : '';
+    } else {
+      // 폴백 휴리스틱 (헤더 없는 파일)
+      const gradeIdx = r.findIndex(c => /^[A-E]$/.test(c));
+      if (gradeIdx < 0) return;
+      name     = r[1] || '';
+      year     = r[2] || '';
+      sem      = r[3] || '';
+      eduCat   = r[4] || '';
+      subject  = r[5] || r[4] || '';
+      grade    = r[gradeIdx];
+      // 원점수: gradeIdx 앞에서 0~100 범위 숫자
+      rawScore = r.slice(5, gradeIdx).find(c => /^\d{1,3}(\.\d+)?$/.test(c) && +c<=100) || '';
+      // 석차등급: gradeIdx 뒤에서 1~9 단일 숫자
+      rank     = r.slice(gradeIdx+1).find(c => /^[1-9]$/.test(c)) || '';
+    }
+
+    // 검증
+    if (!name || name.length<2 || name.length>5 || /^\d+$/.test(name)) return;
+    if (!grade || !/^[A-E]$/.test(grade)) return;
+    if (!subject) return;
+
+    // normalized 6과목 데이터
     if (!state.neisData[name]) state.neisData[name] = {};
     const key = subjKey(subject, sem);
     if (key) state.neisData[name][key] = grade;
 
-    // 상세 데이터 (전 교과목)
+    // 전 교과목 상세 데이터
     if (!state.students[name]) state.students[name] = { mock:[], neis:null, neisDetail:[], setech:'', setechSubs:[], memo:'', num:'' };
     if (!state.students[name].neisDetail) state.students[name].neisDetail = [];
-    const semStr = /2/.test(sem) ? '2학기' : '1학기';
-    // 중복 방지
+    const semStr = /2/.test(String(sem)) ? '2학기' : '1학기';
     const dup = state.students[name].neisDetail.find(d => d.subject===subject && d.semester===semStr);
-    if (!dup) state.students[name].neisDetail.push({ subject, eduCat, semester:semStr, grade, year });
+    if (!dup) {
+      state.students[name].neisDetail.push({
+        subject, eduCat, semester: semStr, grade, year,
+        rawScore: rawScore ? String(rawScore) : '',
+        rank:     rank     ? String(rank)     : '',
+      });
+    }
   });
 
   Object.keys(state.neisData).forEach(name => {
@@ -647,11 +701,11 @@ function parseNeisRows(rows, filename) {
     state.students[name].neis = state.neisData[name];
   });
   const cnt = Object.keys(state.neisData).length;
-  state.uploadedFiles.neis = { name:filename||'neis.xlsx', count:cnt };
+  state.uploadedFiles.neis = { name: filename||'neis.xlsx', count: cnt };
   updatePill('pill-neis','내신 '+cnt+'명');
   updatePill('pill-roster','명단 '+Object.keys(state.students).length+'명');
   document.getElementById('card-neis').classList.add('done');
-  rebuildList(); updateFileStatus();
+  rebuildList(); updateFileStatus(); saveToStorage();
   showToast('✅ 내신 로드 완료 · '+cnt+'명 자동 인식');
 }
 function subjKey(subj, sem) {
@@ -707,7 +761,7 @@ function parseSetechRows(rows, filename) {
   updatePill('pill-setech','세특 '+cnt+'명');
   updatePill('pill-roster','명단 '+Object.keys(state.students).length+'명');
   document.getElementById('card-setech').classList.add('done');
-  rebuildList(); updateFileStatus();
+  rebuildList(); updateFileStatus(); saveToStorage();
   showToast('✅ 세특 로드 완료 · '+cnt+'명 자동 인식');
 }
 
@@ -725,7 +779,7 @@ function parseRosterRows(rows, filename) {
   state.uploadedFiles.roster={ name:filename||'roster.xlsx', count };
   updatePill('pill-roster','명단 '+Object.keys(state.students).length+'명');
   document.getElementById('card-roster').classList.add('done');
-  rebuildList(); updateFileStatus();
+  rebuildList(); updateFileStatus(); saveToStorage();
   showToast('✅ 명단 로드 완료 ('+count+'명)');
 }
 
@@ -776,7 +830,7 @@ function deleteFile(type, idx) {
   const total=Object.keys(state.students).length;
   if (total>0) updatePill('pill-roster','명단 '+total+'명'); else { setPillEmpty('pill-roster','명단 없음'); document.getElementById('classLabel').textContent='데이터를 업로드해주세요'; }
   if (state.selectedName&&!state.students[state.selectedName]) { state.selectedName=null; showUploadScreen(); }
-  updateFileStatus(); rebuildList();
+  updateFileStatus(); rebuildList(); saveToStorage();
   showToast('🗑️ 파일 데이터 삭제됨');
 }
 function setPillEmpty(id,text) { const el=document.getElementById(id); el.textContent=text; el.className='pill empty'; }
@@ -795,7 +849,7 @@ function confirmAddStudent() {
   if (state.students[name]) { showToast('⚠️ 이미 존재하는 학생입니다'); return; }
   state.students[name]={ mock:[], neis:null, neisDetail:[], setech:'', setechSubs:[], memo:'', num };
   updatePill('pill-roster','명단 '+Object.keys(state.students).length+'명');
-  closeAddModal(); rebuildList(); selectStudent(name);
+  closeAddModal(); rebuildList(); selectStudent(name); saveToStorage();
   showToast('✅ '+name+' 추가됨');
 }
 function deleteStudent(name) {
@@ -804,7 +858,7 @@ function deleteStudent(name) {
   const total=Object.keys(state.students).length;
   if (total>0) updatePill('pill-roster','명단 '+total+'명'); else setPillEmpty('pill-roster','명단 없음');
   if (state.selectedName===name) { state.selectedName=null; if (total>0) selectStudent(Object.keys(state.students).sort((a,b)=>a.localeCompare(b,'ko'))[0]); else showUploadScreen(); }
-  rebuildList(); showToast('🗑️ '+name+' 삭제됨');
+  rebuildList(); saveToStorage(); showToast('🗑️ '+name+' 삭제됨');
 }
 document.addEventListener('keydown', e => {
   if (!document.getElementById('addModal').classList.contains('show')) return;
@@ -869,7 +923,10 @@ function rebuildList(filter) {
 }
 function filterStudents(v) { rebuildList(v); }
 function selectStudent(name) {
-  state.selectedName=name; rebuildList();
+  state.selectedName=name;
+  state.neisFilter=null;          // 학생 바뀌면 과목 필터 초기화
+  state.scoreFilter={year:null,month:null};
+  rebuildList();
   const stu=state.students[name];
   document.getElementById('welcomeScreen').style.display='none';
   document.getElementById('detailScreen').style.display='flex';
@@ -1078,99 +1135,139 @@ function renderNeis(content, name) {
 
   let html = '';
 
-  // ① 전 교과목 성취도 테이블 (neisDetail 기반)
   if (hasDetail) {
-    // 교과 대분류 목록 추출
-    const allCats = [...new Set(stu.neisDetail.map(d => d.eduCat).filter(Boolean))];
+    // 원점수/석차등급 보유 여부 확인
+    const hasRaw  = stu.neisDetail.some(d => d.rawScore && d.rawScore !== '');
+    const hasRank = stu.neisDetail.some(d => d.rank     && d.rank     !== '');
 
-    // 필터 바
-    if (allCats.length > 1) {
-      let filterHtml = '<div class="filter-bar"><span class="filter-label">교과</span>';
-      filterHtml += '<button class="filter-btn'+(state.neisFilter===null?' active':'')+'" onclick="setNeisFilter(null)">전체</button>';
-      allCats.forEach(cat => {
-        const active = state.neisFilter===cat ? ' active' : '';
-        filterHtml += '<button class="filter-btn'+active+'" onclick="setNeisFilter(\''+cat.replace(/'/g,"\\'")+'\')">'+(cat||'기타')+'</button>';
+    // ① 과목 필터 바 (개별 과목명 기준)
+    const allSubjects = [...new Set(stu.neisDetail.map(d => d.subject).filter(Boolean))];
+    if (allSubjects.length > 1) {
+      let filterHtml = '<div class="filter-bar" style="overflow-x:auto;flex-wrap:nowrap;padding-bottom:4px">'
+        +'<span class="filter-label" style="flex-shrink:0">과목</span>'
+        +'<button class="filter-btn'+(state.neisFilter===null?' active':'')+'" onclick="setNeisFilter(null)" style="flex-shrink:0">전체</button>';
+      allSubjects.forEach(subj => {
+        const esc = subj.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+        const active = state.neisFilter===subj ? ' active' : '';
+        filterHtml += '<button class="filter-btn'+active+'" style="flex-shrink:0" onclick="setNeisFilter(\''+esc+'\')">'+subj+'</button>';
       });
       filterHtml += '</div>';
       html += filterHtml;
     }
 
-    // 교과목별로 grouping (필터 적용)
-    const subjMap = {};
+    // ② 과목별 grouping (필터 적용)
+    const subjMap = {};  // subject -> { eduCat, '1학기': {grade,raw,rank}, '2학기': {grade,raw,rank} }
     stu.neisDetail
-      .filter(d => state.neisFilter === null || d.eduCat === state.neisFilter)
+      .filter(d => state.neisFilter === null || d.subject === state.neisFilter)
       .forEach(d => {
         if (!subjMap[d.subject]) subjMap[d.subject] = { eduCat: d.eduCat };
-        subjMap[d.subject][d.semester] = d.grade;
+        subjMap[d.subject][d.semester] = { grade: d.grade, raw: d.rawScore||'', rank: d.rank||'' };
       });
 
+    // ③ 성적 테이블 (원점수/성취도/석차등급)
+    const semCols = hasRaw || hasRank
+      ? (s => `<th>${s} 원점수</th><th>${s} 성취도</th>`+(hasRank?`<th>${s} 등급</th>`:''))
+      : (s => `<th>${s}</th>`);
+
+    const tableHeader = '<tr><th style="text-align:left">과목명</th>'
+      + semCols('1학기') + semCols('2학기')
+      + '<th>추이</th></tr>';
+
     const tableRows = Object.entries(subjMap).map(([subj, data]) => {
-      const g1 = data['1학기'] || '-';
-      const g2 = data['2학기'] || '-';
+      const d1 = data['1학기'] || {};
+      const d2 = data['2학기'] || {};
+      const g1 = d1.grade || '-', g2 = d2.grade || '-';
       const n1 = GRADE_TO_NUM[g1]||0, n2 = GRADE_TO_NUM[g2]||0;
       let trendIcon = '', trendCls = 'trend-eq';
       if (g1!=='-' && g2!=='-') {
-        if (n2>n1) { trendIcon='▲'; trendCls='trend-up'; }
+        if (n2>n1)      { trendIcon='▲'; trendCls='trend-up'; }
         else if (n2<n1) { trendIcon='▼'; trendCls='trend-dn'; }
-        else { trendIcon='='; }
+        else              trendIcon='=';
       }
+
+      const cell = (d, g) => {
+        if (hasRaw || hasRank) {
+          return '<td style="font-family:var(--mono);font-size:11px">'+(d.raw||'-')+'</td>'
+            +'<td><span class="'+getGradeClass(g)+'">'+g+'</span></td>'
+            +(hasRank?'<td style="font-family:var(--mono);font-size:11px">'+(d.rank||'-')+'</td>':'');
+        }
+        return '<td><span class="'+getGradeClass(g)+'">'+g+'</span></td>';
+      };
+
       return '<tr><td class="subj-cell">'+subj+'</td>'
-        +'<td><span class="'+getGradeClass(g1)+'">'+g1+'</span></td>'
-        +'<td><span class="'+getGradeClass(g2)+'">'+g2+'</span></td>'
-        +'<td class="'+trendCls+'" style="font-size:12px;font-weight:600">'+trendIcon+'</td></tr>';
+        + cell(d1, g1) + cell(d2, g2)
+        + '<td class="'+trendCls+'" style="font-size:12px;font-weight:600">'+trendIcon+'</td></tr>';
     }).join('');
 
-    html += '<div class="card">'+cardHd('전 교과목 성취도 (NEIS 원본 기준)')
-      +'<div class="card-body">'
-      +'<table class="neis-table"><thead><tr><th style="text-align:left">과목명</th><th>1학기</th><th>2학기</th><th>추이</th></tr></thead><tbody>'
-      +tableRows+'</tbody></table>'
-      +'<div style="margin-top:9px;font-size:10px;color:var(--text3)">A: 상위 20% &nbsp; B: 20~40% &nbsp; C: 40~60% &nbsp; D: 60~80% &nbsp; E: 하위 20%</div>'
-      +'</div></div>';
+    const legend = hasRaw
+      ? '<div style="margin-top:9px;font-size:10px;color:var(--text3)">원점수: 실제 취득 점수 · 성취도: A상위20% B20~40% C40~60% D60~80% E하위20% · 등급: 석차등급(1~9)</div>'
+      : '<div style="margin-top:9px;font-size:10px;color:var(--text3)">A: 상위 20% &nbsp; B: 20~40% &nbsp; C: 40~60% &nbsp; D: 60~80% &nbsp; E: 하위 20%</div>';
 
-    // ② 내신 변화 추이 그래프 (1학기→2학기 변화가 있는 과목)
-    const bothSems = Object.entries(subjMap).filter(([,d]) => d['1학기'] && d['2학기']);
-    if (bothSems.length >= 2) {
-      // 각 과목의 1학기, 2학기 점수를 숫자로 변환해서 선 그래프 표시
-      const series1 = {
-        label:'1학기', color:'#C8D4F8',
-        points: bothSems.map(([s,d]) => ({ x: s.length>4?s.slice(0,4):s, y: GRADE_TO_NUM[d['1학기']]||0 }))
-      };
-      const series2 = {
-        label:'2학기', color:'#2D5BE3',
-        points: bothSems.map(([s,d]) => ({ x: s.length>4?s.slice(0,4):s, y: GRADE_TO_NUM[d['2학기']]||0 }))
-      };
+    html += '<div class="card">'+cardHd('과목별 성적 현황 (NEIS 기준)')
+      +'<div class="card-body" style="overflow-x:auto">'
+      +'<table class="neis-table"><thead>'+tableHeader+'</thead><tbody>'+tableRows+'</tbody></table>'
+      +legend+'</div></div>';
+
+    // ④ 원점수 추이 그래프 (원점수가 있을 때)
+    if (hasRaw) {
+      const subjsWithRaw = Object.entries(subjMap).filter(([,d]) =>
+        (d['1학기']?.raw && d['1학기'].raw!=='') || (d['2학기']?.raw && d['2학기'].raw!=='')
+      );
+      const series1 = { label:'1학기', color:'#C8D4F8',
+        points: subjsWithRaw.map(([s,d]) => ({ x: s.length>5?s.slice(0,5):s, y: parseFloat(d['1학기']?.raw)||0 })) };
+      const series2 = { label:'2학기', color:'#2D5BE3',
+        points: subjsWithRaw.map(([s,d]) => ({ x: s.length>5?s.slice(0,5):s, y: parseFloat(d['2학기']?.raw)||0 })) };
       const legendHtml = '<div class="legend">'
         +'<div class="leg"><div class="leg-sq" style="background:#C8D4F8"></div>1학기</div>'
         +'<div class="leg"><div class="leg-sq" style="background:#2D5BE3"></div>2학기</div></div>';
-      html += '<div class="card">'+cardHd('1학기 → 2학기 등급 변화 추이', legendHtml)
-        +'<div class="card-body">'
-        +'<div style="font-size:10px;color:var(--text3);margin-bottom:6px">* 수치가 높을수록 좋은 등급 (A=5, B=4, C=3, D=2, E=1)</div>'
-        +svgMultiLine([series1, series2], 140)
-        +'</div></div>';
+      if (subjsWithRaw.length >= 2) {
+        html += '<div class="card">'+cardHd('과목별 원점수 비교', legendHtml)
+          +'<div class="card-body">'+svgMultiLine([series1, series2], 150)+'</div></div>';
+      }
     }
 
-    // ③ 향상/하락 분석
-    const improved   = bothSems.filter(([,d]) => (GRADE_TO_NUM[d['2학기']]||0) > (GRADE_TO_NUM[d['1학기']]||0));
-    const declined   = bothSems.filter(([,d]) => (GRADE_TO_NUM[d['2학기']]||0) < (GRADE_TO_NUM[d['1학기']]||0));
-    const maintained = bothSems.filter(([,d]) => (GRADE_TO_NUM[d['2학기']]||0) === (GRADE_TO_NUM[d['1학기']]||0));
+    // ⑤ 성취도 변화 추이 그래프 (1→2학기)
+    const bothSems = Object.entries(subjMap).filter(([,d]) => d['1학기']?.grade && d['2학기']?.grade);
+    if (bothSems.length >= 2) {
+      const series1g = { label:'1학기', color:'#C8D4F8',
+        points: bothSems.map(([s,d]) => ({ x: s.length>5?s.slice(0,5):s, y: GRADE_TO_NUM[d['1학기'].grade]||0 })) };
+      const series2g = { label:'2학기', color:'#2D5BE3',
+        points: bothSems.map(([s,d]) => ({ x: s.length>5?s.slice(0,5):s, y: GRADE_TO_NUM[d['2학기'].grade]||0 })) };
+      const legendHtml2 = '<div class="legend">'
+        +'<div class="leg"><div class="leg-sq" style="background:#C8D4F8"></div>1학기</div>'
+        +'<div class="leg"><div class="leg-sq" style="background:#2D5BE3"></div>2학기</div></div>';
+      html += '<div class="card">'+cardHd('성취도 등급 변화 추이 (1→2학기)', legendHtml2)
+        +'<div class="card-body">'
+        +'<div style="font-size:10px;color:var(--text3);margin-bottom:6px">수치가 높을수록 좋은 등급 (A=5, B=4, C=3, D=2, E=1)</div>'
+        +svgMultiLine([series1g, series2g], 140)+'</div></div>';
+    }
+
+    // ⑥ 과목별 변화 분석
+    const improved   = bothSems.filter(([,d]) => (GRADE_TO_NUM[d['2학기'].grade]||0) > (GRADE_TO_NUM[d['1학기'].grade]||0));
+    const declined   = bothSems.filter(([,d]) => (GRADE_TO_NUM[d['2학기'].grade]||0) < (GRADE_TO_NUM[d['1학기'].grade]||0));
+    const maintained = bothSems.filter(([,d]) => (GRADE_TO_NUM[d['2학기'].grade]||0) === (GRADE_TO_NUM[d['1학기'].grade]||0));
 
     if (bothSems.length > 0) {
       const analysisRows = Object.entries(subjMap).map(([subj, data]) => {
-        const g1=data['1학기']||'-', g2=data['2학기']||'-';
-        if (g1==='-'&&g2==='-') return '';
+        const g1 = data['1학기']?.grade||'-', g2 = data['2학기']?.grade||'-';
+        if (g1==='-' && g2==='-') return '';
         const n1=GRADE_TO_NUM[g1]||0, n2=GRADE_TO_NUM[g2]||0;
         let trendText='', trendColor='var(--text3)';
-        if (g1!=='-'&&g2!=='-') {
-          if (n2>n1) { trendText='▲ 향상'; trendColor='var(--green)'; }
+        if (g1!=='-' && g2!=='-') {
+          if (n2>n1)      { trendText='▲ 향상'; trendColor='var(--green)'; }
           else if (n2<n1) { trendText='▼ 하락'; trendColor='var(--red)'; }
-          else trendText='= 유지';
+          else              trendText='= 유지';
         }
-        const g2show = g2==='-' ? g1 : g2; // 최신 등급
-        const nextG  = NEXT_GRADE[g2show];
-        const nextDesc = nextG ? GRADE_NEXT_DESC[g2show] : '최고 등급';
+        const gLatest = g2==='-' ? g1 : g2;
+        const nextG   = NEXT_GRADE[gLatest];
+        const nextDesc= nextG ? GRADE_NEXT_DESC[gLatest] : '최고 등급 유지 중';
         return '<div class="analysis-row">'
           +'<div><div class="analysis-subj">'+subj+'</div>'
-          +'<div class="analysis-detail">'+(g1!=='-'?'1학기: <span class="'+getGradeClass(g1)+'">'+g1+'</span>':'')+' '+trendText+' '+(g2!=='-'?'→ 2학기: <span class="'+getGradeClass(g2)+'">'+g2+'</span>':'')+'</div></div>'
+          +'<div class="analysis-detail">'
+          +(g1!=='-'?'1학기: <span class="'+getGradeClass(g1)+'">'+g1+'</span>'+(data['1학기']?.raw?' ('+data['1학기'].raw+'점)':''):'' )
+          +' '+trendText+' '
+          +(g2!=='-'?'→ 2학기: <span class="'+getGradeClass(g2)+'">'+g2+'</span>'+(data['2학기']?.raw?' ('+data['2학기'].raw+'점)':''):'')
+          +'</div></div>'
           +'<div style="text-align:right;font-size:11px;color:var(--text3)">'+nextDesc+'</div></div>';
       }).join('');
 
@@ -1183,17 +1280,21 @@ function renderNeis(content, name) {
         +'<div class="card-body">'+analysisRows+'</div></div>';
     }
 
-    // ④ 등급 향상 목표 분석
+    // ⑦ 등급 향상 목표
     const targetRows = Object.entries(subjMap)
-      .filter(([,d]) => d['1학기']||d['2학기'])
+      .filter(([,d]) => d['1학기']?.grade || d['2학기']?.grade)
       .map(([subj, data]) => {
-        const latest = data['2학기'] || data['1학기'];
-        const next   = NEXT_GRADE[latest];
-        if (!next) return ''; // 이미 A등급
-        const semLabel = data['2학기'] ? '2학기' : '1학기';
+        const latest   = (data['2학기']?.grade || data['1학기']?.grade);
+        const latestRaw= (data['2학기']?.raw   || data['1학기']?.raw  ) || '';
+        const next     = NEXT_GRADE[latest];
+        if (!next) return '';
+        const semLabel = data['2학기']?.grade ? '2학기' : '1학기';
         return '<div style="padding:7px 0;border-bottom:1px solid var(--border)">'
           +'<div style="display:flex;justify-content:space-between;align-items:center">'
-          +'<div style="font-size:12px;font-weight:500">'+subj+' <span class="'+getGradeClass(latest)+'">'+latest+'</span><span style="color:var(--text3);font-size:10px;margin-left:4px">('+semLabel+')</span></div>'
+          +'<div style="font-size:12px;font-weight:500">'+subj
+          +' <span class="'+getGradeClass(latest)+'">'+latest+'</span>'
+          +(latestRaw?' <span style="color:var(--text3);font-size:10px">'+latestRaw+'점</span>':'')
+          +'<span style="color:var(--text3);font-size:10px;margin-left:4px">('+semLabel+')</span></div>'
           +'<span style="font-size:11px;color:var(--text3)">→ <strong>'+next+'등급</strong> 목표</span></div>'
           +'<div style="font-size:10px;color:var(--text3);margin-top:3px">'+GRADE_RANGE[latest]+' → '+GRADE_RANGE[next]+' 필요</div>'
           +'</div>';
@@ -1202,11 +1303,11 @@ function renderNeis(content, name) {
     if (targetRows.trim()) {
       html += '<div class="card">'+cardHd('등급 향상 목표')
         +'<div class="card-body">'
-        +'<div class="target-box" style="margin-bottom:10px">등급 기준: <strong>A</strong> 상위 20% · <strong>B</strong> 20~40% · <strong>C</strong> 40~60% · <strong>D</strong> 60~80% · <strong>E</strong> 하위 20%<br>정확한 원점수 기준은 학교별 성적 분포에 따라 다름</div>'
+        +'<div class="target-box" style="margin-bottom:10px">등급: <strong>A</strong> 상위20% · <strong>B</strong> 20~40% · <strong>C</strong> 40~60% · <strong>D</strong> 60~80% · <strong>E</strong> 하위20%<br>정확한 컷오프는 학교·연도별 성적 분포에 따라 다름</div>'
         +targetRows+'</div></div>';
     }
+
   } else if (hasNeis) {
-    // neisDetail 없고 구버전 neis만 있는 경우
     const n=stu.neis, subjs=['국어','수학','영어','사회','과학','한국사'];
     const neisRows=['1','2'].map(sem=>
       '<div style="padding:5px 0"><strong>'+(sem==='1'?'1학기':'2학기')+'</strong>: '
@@ -1371,7 +1472,7 @@ function saveMemo(name) {
   const text=document.getElementById('memoText')?.value||'';
   if(!state.students[name]) return;
   state.students[name].memo=text; state.memos[name]=text; delete state.aiCache[name];
-  showToast('✅ 메모 저장됨');
+  saveToStorage(); showToast('✅ 메모 저장됨');
   renderMemo(document.getElementById('mainContent'),name);
 }
 
@@ -1384,6 +1485,68 @@ function showToast(msg) {
   const t=document.getElementById('toast'); t.textContent=msg;
   t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),2800);
 }
+
+// ── localStorage 영속성 ────────────────────────
+const STORAGE_KEY = 'damim_v2';
+
+function saveToStorage() {
+  try {
+    const payload = {
+      students:      state.students,
+      neisData:      state.neisData,
+      setechData:    state.setechData,
+      uploadedFiles: state.uploadedFiles,
+      memos:         state.memos,
+    };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+  } catch(e) {
+    // 용량 초과 등 예외는 무시 (데이터는 메모리에 유지)
+  }
+}
+
+function loadFromStorage() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return false;
+    const d = JSON.parse(raw);
+    if (d.students)      Object.assign(state.students,      d.students);
+    if (d.neisData)      Object.assign(state.neisData,      d.neisData);
+    if (d.setechData)    Object.assign(state.setechData,    d.setechData);
+    if (d.uploadedFiles) {
+      if (d.uploadedFiles.roster) state.uploadedFiles.roster = d.uploadedFiles.roster;
+      if (d.uploadedFiles.neis)   state.uploadedFiles.neis   = d.uploadedFiles.neis;
+      if (d.uploadedFiles.setech) state.uploadedFiles.setech = d.uploadedFiles.setech;
+      if (Array.isArray(d.uploadedFiles.mock)) state.uploadedFiles.mock = d.uploadedFiles.mock;
+    }
+    if (d.memos) Object.assign(state.memos, d.memos);
+    return true;
+  } catch(e) { return false; }
+}
+
+function clearStorage() {
+  if (!confirm('저장된 모든 데이터를 삭제하시겠습니까?\n(새로고침 후에도 데이터가 사라집니다)')) return;
+  localStorage.removeItem(STORAGE_KEY);
+  location.reload();
+}
+
+// ── 페이지 로드 시 복원 ───────────────────────
+window.addEventListener('DOMContentLoaded', () => {
+  const restored = loadFromStorage();
+  if (restored && Object.keys(state.students).length > 0) {
+    const cnt = Object.keys(state.students).length;
+    updatePill('pill-roster', '명단 '+cnt+'명');
+    const months = getUniqMonths();
+    if (months > 0) { updatePill('pill-mock','모의 '+months+'회'); document.getElementById('card-mock').classList.add('done'); }
+    const neisCnt = Object.keys(state.neisData).length;
+    if (neisCnt > 0) { updatePill('pill-neis','내신 '+neisCnt+'명'); document.getElementById('card-neis').classList.add('done'); }
+    const setechCnt = Object.keys(state.setechData).length;
+    if (setechCnt > 0) { updatePill('pill-setech','세특 '+setechCnt+'명'); document.getElementById('card-setech').classList.add('done'); }
+    if (state.uploadedFiles.roster) document.getElementById('card-roster').classList.add('done');
+    rebuildList();
+    updateFileStatus();
+    showToast('✅ 이전 데이터 복원됨 ('+cnt+'명)');
+  }
+});
 </script>
 </body>
 </html>
