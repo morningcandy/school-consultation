@@ -850,7 +850,7 @@ function renderScore(content, name) {
   const chartBars = mocks.map((m, mi) => {
     const bars = chartSubjs.map(s => {
       const h = Math.round(((m.scores[s]||0)/100)*70);
-      return `<div class="bar" style="height:${h}px;background:${mi===mocks.length-1?'var(--accent)':'var(--accent-light)';}" title="${m.month} ${s}: ${m.scores[s]}"></div>`;
+      return `<div class="bar" style="height:${h}px;background:${mi===mocks.length-1?'var(--accent)':'var(--accent-light)'}" title="${m.month} ${s}: ${m.scores[s]}"></div>`;
     }).join('');
     return `<div class="bar-grp"><div class="bars">${bars}</div><div class="bar-lbl">${m.month}</div></div>`;
   });
