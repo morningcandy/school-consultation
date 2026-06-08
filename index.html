@@ -361,9 +361,9 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); min-
 
     <div class="sidebar-footer">
       <div class="upload-zone">
-        <input type="file" multiple accept=".xlsx,.csv" onchange="handleSidebarUpload(event)">
+        <input type="file" multiple accept=".xlsx,.xls,.csv" onchange="handleSidebarUpload(event)">
         <div class="upload-zone-text">📁 파일 추가 업로드</div>
-        <div class="upload-zone-sub">xlsx, csv 지원</div>
+        <div class="upload-zone-sub">xlsx, xls, csv 지원</div>
       </div>
     </div>
   </div>
@@ -379,28 +379,28 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); min-
         </div>
         <div class="upload-cards" id="uploadCards">
           <div class="upload-card" id="card-roster">
-            <input type="file" accept=".xlsx,.csv" onchange="loadFile(event,'roster')">
+            <input type="file" accept=".xlsx,.xls,.csv" onchange="loadFile(event,'roster')">
             <div class="upload-card-icon">📋</div>
             <div class="upload-card-title">학생 명단</div>
-            <div class="upload-card-desc">학번·이름 포함<br>xlsx 또는 csv</div>
+            <div class="upload-card-desc">학번·이름 포함<br>xlsx, xls, csv</div>
           </div>
           <div class="upload-card" id="card-mock">
-            <input type="file" accept=".xlsx,.csv" multiple onchange="loadFile(event,'mock')">
+            <input type="file" accept=".xlsx,.xls,.csv" multiple onchange="loadFile(event,'mock')">
             <div class="upload-card-icon">📊</div>
             <div class="upload-card-title">모의고사 성적</div>
             <div class="upload-card-desc">월별 복수 업로드 가능<br>해성에듀·교육청 양식</div>
           </div>
           <div class="upload-card" id="card-neis">
-            <input type="file" accept=".xlsx,.csv" onchange="loadFile(event,'neis')">
+            <input type="file" accept=".xlsx,.xls,.csv" onchange="loadFile(event,'neis')">
             <div class="upload-card-icon">🏫</div>
             <div class="upload-card-title">내신 성적 (NEIS)</div>
-            <div class="upload-card-desc">교과학습발달상황<br>xlsx 또는 csv</div>
+            <div class="upload-card-desc">교과학습발달상황<br>xlsx, xls, csv — 명단 자동 생성</div>
           </div>
           <div class="upload-card" id="card-setech">
-            <input type="file" accept=".xlsx,.csv" onchange="loadFile(event,'setech')">
+            <input type="file" accept=".xlsx,.xls,.csv" onchange="loadFile(event,'setech')">
             <div class="upload-card-icon">📝</div>
             <div class="upload-card-title">세부능력특기사항</div>
-            <div class="upload-card-desc">세특 xlsx<br>AI 로드맵에 활용</div>
+            <div class="upload-card-desc">세특 xlsx, xls, csv<br>명단 자동 생성 · AI 로드맵 활용</div>
           </div>
         </div>
         <div style="font-size:11px;color:var(--text3);text-align:center;line-height:1.8">
@@ -481,10 +481,11 @@ function loadFile(event, type) {
 
 function loadFileObj(file, type) {
   const reader = new FileReader();
+  const isCSV = file.name.toLowerCase().endsWith('.csv');
   reader.onload = (e) => {
     try {
       const data = e.target.result;
-      if (file.name.endsWith('.csv')) {
+      if (isCSV) {
         parseCSV(data, type, file.name);
       } else {
         const wb = XLSX.read(data, { type: 'binary' });
@@ -494,7 +495,7 @@ function loadFileObj(file, type) {
       showToast('⚠️ 파일 읽기 오류: ' + file.name);
     }
   };
-  if (file.name.endsWith('.csv')) reader.readAsText(file, 'EUC-KR');
+  if (isCSV) reader.readAsText(file, 'EUC-KR');
   else reader.readAsBinaryString(file);
 }
 
@@ -604,8 +605,9 @@ function parseNeisRows(rows) {
     state.students[name].neis = state.neisData[name];
   });
   updatePill('pill-neis', 'NEIS ' + Object.keys(state.neisData).length + '명');
+  updatePill('pill-roster', '명단 ' + Object.keys(state.students).length + '명');
   rebuildList();
-  showToast('✅ 내신 데이터 로드 완료');
+  showToast('✅ 내신 데이터 로드 완료 · 학생 ' + Object.keys(state.neisData).length + '명 자동 인식');
 }
 
 function subjKey(subj, sem) {
@@ -650,8 +652,9 @@ function parseSetechRows(rows) {
     state.students[name].setech = state.setechData[name];
   });
   updatePill('pill-setech', '세특 ' + Object.keys(state.setechData).length + '명');
+  updatePill('pill-roster', '명단 ' + Object.keys(state.students).length + '명');
   rebuildList();
-  showToast('✅ 세특 데이터 로드 완료');
+  showToast('✅ 세특 데이터 로드 완료 · 학생 ' + Object.keys(state.setechData).length + '명 자동 인식');
 }
 
 // ─── ROSTER PARSER ───
