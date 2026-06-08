@@ -1,0 +1,1159 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>담임 상담 시스템</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700&family=DM+Mono:wght@400;500&display=swap');
+
+:root {
+  --bg: #F7F6F2;
+  --surface: #FFFFFF;
+  --surface2: #F0EFE9;
+  --border: rgba(0,0,0,0.08);
+  --border-strong: rgba(0,0,0,0.15);
+  --text: #1A1917;
+  --text2: #6B6A66;
+  --text3: #9B9A96;
+  --accent: #2D5BE3;
+  --accent-bg: #EEF2FD;
+  --accent-light: #D0DAFC;
+  --green: #1A7F5A;
+  --green-bg: #E8F5F0;
+  --amber: #9B5A00;
+  --amber-bg: #FFF3E0;
+  --red: #C0392B;
+  --red-bg: #FDECEA;
+  --purple: #5B3DB8;
+  --purple-bg: #F0ECFC;
+  --mono: 'DM Mono', monospace;
+  --sans: 'Noto Sans KR', sans-serif;
+  --radius: 10px;
+  --radius-lg: 16px;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { font-size: 14px; }
+body { font-family: var(--sans); background: var(--bg); color: var(--text); min-height: 100vh; }
+
+/* ─── LAYOUT ─── */
+.shell { display: flex; height: 100vh; overflow: hidden; }
+
+/* ─── SIDEBAR ─── */
+.sidebar {
+  width: 260px; flex-shrink: 0;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  display: flex; flex-direction: column;
+  overflow: hidden;
+}
+.sidebar-header {
+  padding: 20px 18px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.logo { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+.logo-mark {
+  width: 30px; height: 30px; border-radius: 8px;
+  background: var(--accent); display: flex; align-items: center; justify-content: center;
+}
+.logo-mark svg { width: 16px; height: 16px; fill: white; }
+.app-name { font-size: 14px; font-weight: 700; letter-spacing: -0.3px; color: var(--text); }
+.app-sub { font-size: 11px; color: var(--text3); margin-top: 2px; }
+
+.data-status { margin-top: 12px; }
+.status-pills { display: flex; flex-wrap: wrap; gap: 4px; }
+.pill {
+  font-size: 10px; padding: 2px 8px; border-radius: 20px;
+  font-family: var(--mono); font-weight: 500;
+}
+.pill.loaded { background: var(--green-bg); color: var(--green); }
+.pill.empty { background: var(--surface2); color: var(--text3); border: 1px solid var(--border); }
+
+.sidebar-search {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.search-input {
+  width: 100%; padding: 7px 10px; font-size: 12px; font-family: var(--sans);
+  border: 1px solid var(--border-strong); border-radius: var(--radius);
+  background: var(--surface2); color: var(--text); outline: none;
+}
+.search-input:focus { border-color: var(--accent); background: var(--surface); }
+
+.student-list { flex: 1; overflow-y: auto; padding: 6px 0; }
+.student-item {
+  padding: 8px 18px; cursor: pointer;
+  display: flex; align-items: center; gap: 10px;
+  border-left: 3px solid transparent; transition: all 0.1s;
+}
+.student-item:hover { background: var(--surface2); }
+.student-item.active { background: var(--accent-bg); border-left-color: var(--accent); }
+
+.stu-avatar {
+  width: 28px; height: 28px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 700; flex-shrink: 0;
+}
+.stu-info { min-width: 0; }
+.stu-name { font-size: 13px; font-weight: 500; color: var(--text); }
+.stu-score { font-size: 10px; color: var(--text3); font-family: var(--mono); margin-top: 1px; }
+
+.sidebar-footer {
+  padding: 12px 14px;
+  border-top: 1px solid var(--border);
+}
+.upload-zone {
+  border: 1.5px dashed var(--border-strong); border-radius: var(--radius);
+  padding: 10px; text-align: center; cursor: pointer;
+  transition: all 0.15s; background: var(--surface2);
+  position: relative;
+}
+.upload-zone:hover { border-color: var(--accent); background: var(--accent-bg); }
+.upload-zone input { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; }
+.upload-zone-text { font-size: 11px; color: var(--text2); pointer-events: none; }
+.upload-zone-sub { font-size: 10px; color: var(--text3); margin-top: 2px; pointer-events: none; }
+
+/* ─── MAIN ─── */
+.main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+
+/* ─── TOP BAR ─── */
+.topbar {
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  flex-shrink: 0;
+}
+.topbar-left { min-width: 0; }
+.tb-name { font-size: 18px; font-weight: 700; letter-spacing: -0.5px; }
+.tb-meta { font-size: 11px; color: var(--text3); margin-top: 3px; }
+.topbar-right { display: flex; gap: 8px; flex-shrink: 0; }
+
+.btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 7px 14px; border-radius: var(--radius);
+  font-size: 12px; font-weight: 500; font-family: var(--sans);
+  border: 1px solid var(--border-strong); background: var(--surface);
+  color: var(--text); cursor: pointer; transition: all 0.1s; white-space: nowrap;
+}
+.btn:hover { background: var(--surface2); }
+.btn.primary {
+  background: var(--accent); border-color: var(--accent); color: white;
+}
+.btn.primary:hover { background: #2249C7; }
+.btn:disabled { opacity: 0.4; pointer-events: none; }
+.btn svg { width: 14px; height: 14px; }
+
+/* ─── TABS ─── */
+.tabs {
+  display: flex; gap: 0;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 0 24px; flex-shrink: 0;
+}
+.tab {
+  padding: 10px 16px; font-size: 12px; font-weight: 500; color: var(--text2);
+  cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px;
+  transition: all 0.15s; white-space: nowrap;
+}
+.tab:hover { color: var(--text); }
+.tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+/* ─── CONTENT ─── */
+.content { flex: 1; overflow-y: auto; padding: 20px 24px; }
+
+/* ─── CARDS ─── */
+.card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); overflow: hidden; margin-bottom: 14px;
+}
+.card-hd {
+  padding: 12px 16px; border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between;
+  background: var(--surface2);
+}
+.card-label {
+  font-size: 11px; font-weight: 600; color: var(--text2);
+  text-transform: uppercase; letter-spacing: 0.5px;
+}
+.card-body { padding: 14px 16px; }
+
+/* ─── SCORE GRID ─── */
+.score-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; }
+.score-cell {
+  text-align: center; padding: 10px 6px;
+  background: var(--surface2); border-radius: var(--radius);
+  border: 1px solid var(--border);
+}
+.score-subj { font-size: 10px; color: var(--text3); margin-bottom: 4px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.3px; }
+.score-val { font-size: 20px; font-weight: 700; font-family: var(--mono); }
+.score-diff { font-size: 10px; margin-top: 3px; font-family: var(--mono); }
+.up { color: var(--red); } .dn { color: var(--green); } .flat { color: var(--text3); }
+
+/* ─── CHART ─── */
+.bar-chart { display: flex; align-items: flex-end; gap: 16px; height: 100px; padding-top: 8px; }
+.bar-grp { display: flex; flex-direction: column; align-items: center; gap: 4px; flex: 1; }
+.bars { display: flex; gap: 3px; align-items: flex-end; height: 80px; }
+.bar { width: 14px; border-radius: 3px 3px 0 0; min-height: 2px; }
+.b3 { background: #C8D4F8; }
+.b6 { background: var(--accent); }
+.bar-lbl { font-size: 10px; color: var(--text3); }
+
+/* ─── RANK TABLE ─── */
+.rank-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.rank-table th { padding: 6px 10px; text-align: center; font-weight: 600; font-size: 10px; text-transform: uppercase; letter-spacing: 0.3px; color: var(--text3); background: var(--surface2); border-bottom: 1px solid var(--border); }
+.rank-table td { padding: 8px 10px; text-align: center; border-bottom: 1px solid var(--border); font-family: var(--mono); }
+.rank-table tr:last-child td { border-bottom: none; }
+
+/* ─── NEIS ─── */
+.neis-grid { display: grid; grid-template-columns: 60px repeat(5, 1fr); gap: 1px; background: var(--border); border-radius: 8px; overflow: hidden; font-size: 12px; }
+.neis-cell { padding: 8px; background: var(--surface); text-align: center; }
+.neis-cell.header { background: var(--surface2); font-weight: 600; font-size: 10px; text-transform: uppercase; letter-spacing: 0.3px; color: var(--text3); }
+.neis-cell.row-label { background: var(--surface2); font-size: 11px; color: var(--text2); text-align: left; padding-left: 10px; }
+.g-A { color: #1A7F5A; font-weight: 700; font-family: var(--mono); }
+.g-B { color: #2D5BE3; font-weight: 700; font-family: var(--mono); }
+.g-C { color: #9B5A00; font-weight: 700; font-family: var(--mono); }
+.g-D { color: #C0392B; font-weight: 700; font-family: var(--mono); }
+.g-E { color: #7B1FA2; font-weight: 700; font-family: var(--mono); }
+
+/* ─── AI ─── */
+.ai-section { margin-bottom: 14px; }
+.ai-section-hd {
+  display: flex; align-items: center; gap: 8px; margin-bottom: 8px;
+  font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text2);
+}
+.ai-section-hd::before { content:''; display: inline-block; width: 10px; height: 10px; border-radius: 3px; }
+.ai-sec-score::before { background: var(--accent); }
+.ai-sec-strength::before { background: var(--green); }
+.ai-sec-setech::before { background: var(--amber); }
+.ai-sec-goal::before { background: var(--purple); }
+.ai-point {
+  display: flex; gap: 10px; padding: 10px 12px;
+  background: var(--surface2); border-radius: var(--radius);
+  margin-bottom: 6px; font-size: 12px; line-height: 1.65; color: var(--text);
+  border-left: 3px solid;
+}
+.ai-sec-score .ai-point { border-color: var(--accent); }
+.ai-sec-strength .ai-point { border-color: var(--green); }
+.ai-sec-setech .ai-point { border-color: var(--amber); }
+.ai-sec-goal .ai-point { border-color: var(--purple); }
+.ai-num { font-size: 10px; font-family: var(--mono); font-weight: 700; color: var(--text3); margin-top: 2px; flex-shrink: 0; }
+
+/* ─── EMPTY / UPLOAD STATES ─── */
+.empty-state {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  height: 100%; gap: 12px; color: var(--text3); text-align: center; padding: 40px;
+}
+.empty-icon { font-size: 48px; margin-bottom: 4px; }
+.empty-title { font-size: 16px; font-weight: 600; color: var(--text2); }
+.empty-body { font-size: 13px; line-height: 1.6; max-width: 400px; }
+
+.upload-big {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  height: calc(100vh - 80px); gap: 24px; padding: 40px;
+}
+.upload-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; width: 100%; max-width: 700px; }
+.upload-card {
+  background: var(--surface); border: 1.5px dashed var(--border-strong);
+  border-radius: var(--radius-lg); padding: 20px; text-align: center;
+  cursor: pointer; transition: all 0.15s; position: relative; overflow: hidden;
+}
+.upload-card:hover { border-color: var(--accent); background: var(--accent-bg); transform: translateY(-2px); }
+.upload-card input { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; }
+.upload-card-icon { font-size: 28px; margin-bottom: 8px; }
+.upload-card-title { font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 4px; }
+.upload-card-desc { font-size: 11px; color: var(--text3); line-height: 1.5; }
+.upload-card.done { border-color: var(--green); background: var(--green-bg); border-style: solid; }
+.upload-card.done .upload-card-title { color: var(--green); }
+.upload-main-title { font-size: 22px; font-weight: 700; color: var(--text); letter-spacing: -0.5px; }
+.upload-main-sub { font-size: 13px; color: var(--text3); }
+
+/* ─── SPINNER ─── */
+.spinner {
+  width: 14px; height: 14px; border: 2px solid var(--border-strong);
+  border-top-color: var(--accent); border-radius: 50%;
+  animation: spin 0.7s linear infinite; display: inline-block;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ─── CHIP ─── */
+.chip {
+  display: inline-block; font-size: 10px; padding: 2px 8px;
+  border-radius: 20px; font-weight: 600; font-family: var(--mono);
+}
+.chip-blue { background: var(--accent-bg); color: var(--accent); }
+.chip-green { background: var(--green-bg); color: var(--green); }
+.chip-amber { background: var(--amber-bg); color: var(--amber); }
+.chip-red { background: var(--red-bg); color: var(--red); }
+.chip-gray { background: var(--surface2); color: var(--text2); border: 1px solid var(--border); }
+
+/* ─── MEMO BOX ─── */
+.memo-box {
+  background: var(--amber-bg); border: 1px solid rgba(155,90,0,0.2);
+  border-radius: var(--radius); padding: 12px 14px;
+  font-size: 12px; line-height: 1.7; color: var(--text);
+}
+.memo-input {
+  width: 100%; min-height: 80px; resize: vertical;
+  padding: 10px 12px; font-size: 12px; font-family: var(--sans);
+  background: var(--surface2); border: 1px solid var(--border-strong);
+  border-radius: var(--radius); color: var(--text); outline: none; line-height: 1.6;
+}
+.memo-input:focus { border-color: var(--accent); background: var(--surface); }
+
+.legend { display: flex; gap: 12px; align-items: center; font-size: 10px; color: var(--text3); }
+.leg { display: flex; align-items: center; gap: 4px; }
+.leg-sq { width: 10px; height: 10px; border-radius: 2px; }
+
+/* scrollbar */
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 4px; }
+
+/* toast */
+.toast {
+  position: fixed; bottom: 24px; right: 24px;
+  background: var(--text); color: white;
+  padding: 10px 16px; border-radius: var(--radius);
+  font-size: 12px; font-weight: 500;
+  transform: translateY(60px); opacity: 0;
+  transition: all 0.25s; z-index: 9999; pointer-events: none;
+}
+.toast.show { transform: translateY(0); opacity: 1; }
+</style>
+</head>
+<body>
+
+<div class="shell">
+  <!-- SIDEBAR -->
+  <div class="sidebar">
+    <div class="sidebar-header">
+      <div class="logo">
+        <div class="logo-mark">
+          <svg viewBox="0 0 24 24"><path d="M12 3L1 9l11 6 9-4.91V17h2V9L12 3zM5 13.18v4L12 21l7-3.82v-4L12 17l-7-3.82z"/></svg>
+        </div>
+        <div>
+          <div class="app-name">담임 상담 시스템</div>
+        </div>
+      </div>
+      <div class="app-sub" id="classLabel">데이터를 업로드해주세요</div>
+      <div class="data-status" id="dataStatus">
+        <div class="status-pills">
+          <span class="pill empty" id="pill-roster">명단 없음</span>
+          <span class="pill empty" id="pill-mock">모의고사 없음</span>
+          <span class="pill empty" id="pill-neis">생기부 없음</span>
+          <span class="pill empty" id="pill-setech">세특 없음</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="sidebar-search" id="sideSearch" style="display:none">
+      <input class="search-input" type="text" placeholder="학생 검색..." oninput="filterStudents(this.value)" id="searchBox">
+    </div>
+
+    <div class="student-list" id="studentList">
+      <div style="padding:20px 18px; font-size:12px; color:var(--text3); text-align:center; line-height:1.6">
+        파일을 업로드하면<br>학생 목록이 표시됩니다
+      </div>
+    </div>
+
+    <div class="sidebar-footer">
+      <div class="upload-zone">
+        <input type="file" multiple accept=".xlsx,.csv" onchange="handleSidebarUpload(event)">
+        <div class="upload-zone-text">📁 파일 추가 업로드</div>
+        <div class="upload-zone-sub">xlsx, csv 지원</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MAIN -->
+  <div class="main">
+    <!-- 초기 화면 -->
+    <div id="welcomeScreen">
+      <div class="upload-big">
+        <div style="text-align:center">
+          <div class="upload-main-title">📚 담임 상담 시스템</div>
+          <div class="upload-main-sub" style="margin-top:6px">파일을 업로드하면 학생별 성적 분석·생기부·AI 조언이 자동 생성됩니다</div>
+        </div>
+        <div class="upload-cards" id="uploadCards">
+          <div class="upload-card" id="card-roster">
+            <input type="file" accept=".xlsx,.csv" onchange="loadFile(event,'roster')">
+            <div class="upload-card-icon">📋</div>
+            <div class="upload-card-title">학생 명단</div>
+            <div class="upload-card-desc">학번·이름 포함<br>xlsx 또는 csv</div>
+          </div>
+          <div class="upload-card" id="card-mock">
+            <input type="file" accept=".xlsx,.csv" multiple onchange="loadFile(event,'mock')">
+            <div class="upload-card-icon">📊</div>
+            <div class="upload-card-title">모의고사 성적</div>
+            <div class="upload-card-desc">월별 복수 업로드 가능<br>해성에듀·교육청 양식</div>
+          </div>
+          <div class="upload-card" id="card-neis">
+            <input type="file" accept=".xlsx,.csv" onchange="loadFile(event,'neis')">
+            <div class="upload-card-icon">🏫</div>
+            <div class="upload-card-title">내신 성적 (NEIS)</div>
+            <div class="upload-card-desc">교과학습발달상황<br>xlsx 또는 csv</div>
+          </div>
+          <div class="upload-card" id="card-setech">
+            <input type="file" accept=".xlsx,.csv" onchange="loadFile(event,'setech')">
+            <div class="upload-card-icon">📝</div>
+            <div class="upload-card-title">세부능력특기사항</div>
+            <div class="upload-card-desc">세특 xlsx<br>AI 로드맵에 활용</div>
+          </div>
+        </div>
+        <div style="font-size:11px;color:var(--text3);text-align:center;line-height:1.8">
+          ⚡ 파일은 브라우저 내에서만 처리됩니다 · 서버로 전송되지 않습니다<br>
+          명단 없이 모의고사 파일만 올려도 자동으로 학생 목록이 생성됩니다
+        </div>
+      </div>
+    </div>
+
+    <!-- 학생 상세 화면 -->
+    <div id="detailScreen" style="display:none; flex-direction:column; height:100%">
+      <div class="topbar">
+        <div class="topbar-left">
+          <div class="tb-name" id="tbName">—</div>
+          <div class="tb-meta" id="tbMeta">학생을 선택하세요</div>
+        </div>
+        <div class="topbar-right">
+          <button class="btn" onclick="showUploadScreen()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+            파일 관리
+          </button>
+          <button class="btn primary" id="aiBtn" onclick="generateAI()">
+            ✦ AI 분석 생성
+          </button>
+        </div>
+      </div>
+
+      <div class="tabs" id="tabsRow">
+        <div class="tab active" onclick="switchTab('score',this)">성적 분석</div>
+        <div class="tab" onclick="switchTab('neis',this)">내신·생기부</div>
+        <div class="tab" onclick="switchTab('setech',this)">세특</div>
+        <div class="tab" onclick="switchTab('ai',this)">AI 심층분석</div>
+        <div class="tab" onclick="switchTab('memo',this)">상담 메모</div>
+      </div>
+
+      <div class="content" id="mainContent"></div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ──────────────────────────────────────────────
+// STATE
+// ──────────────────────────────────────────────
+const state = {
+  students: {},   // name -> { mock: [{month,scores}], neis: {}, setech: '', memo: '' }
+  mockFiles: [],  // [{month, data}]
+  neisData: {},
+  setechData: {},
+  memos: {},
+  aiCache: {},
+  selectedName: null,
+  currentTab: 'score',
+};
+
+// ──────────────────────────────────────────────
+// FILE LOADING
+// ──────────────────────────────────────────────
+function handleSidebarUpload(e) {
+  const files = Array.from(e.target.files);
+  files.forEach(f => guessAndLoad(f));
+}
+
+function guessAndLoad(file) {
+  const name = file.name.toLowerCase();
+  if (name.includes('세특') || name.includes('세부능력')) loadFileObj(file, 'setech');
+  else if (name.includes('성적') || name.includes('모의') || name.includes('일람') || name.includes('원점수')) loadFileObj(file, 'mock');
+  else if (name.includes('neis') || name.includes('교과') || name.includes('내신') || name.includes('발달')) loadFileObj(file, 'neis');
+  else loadFileObj(file, 'mock'); // 기본은 모의고사로
+}
+
+function loadFile(event, type) {
+  const files = Array.from(event.target.files);
+  files.forEach(f => loadFileObj(f, type));
+}
+
+function loadFileObj(file, type) {
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    try {
+      const data = e.target.result;
+      if (file.name.endsWith('.csv')) {
+        parseCSV(data, type, file.name);
+      } else {
+        const wb = XLSX.read(data, { type: 'binary' });
+        parseXLSX(wb, type, file.name);
+      }
+    } catch(err) {
+      showToast('⚠️ 파일 읽기 오류: ' + file.name);
+    }
+  };
+  if (file.name.endsWith('.csv')) reader.readAsText(file, 'EUC-KR');
+  else reader.readAsBinaryString(file);
+}
+
+function parseCSV(text, type, filename) {
+  // CSV → 2D array
+  const lines = text.split('\n').map(l => l.split(',').map(s => s.trim().replace(/^"|"$/g, '')));
+  if (type === 'mock') parseMockCSV(lines, filename);
+  else if (type === 'neis') parseNeisCSV(lines);
+  else if (type === 'roster') parseRosterCSV(lines);
+}
+
+function parseXLSX(wb, type, filename) {
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+  if (type === 'mock') parseMockRows(rows, filename);
+  else if (type === 'neis') parseNeisRows(rows);
+  else if (type === 'setech') parseSetechRows(rows);
+  else if (type === 'roster') parseRosterRows(rows);
+}
+
+// ─── MOCK PARSER ───
+function parseMockCSV(lines, filename) {
+  // 헤더 행 찾기
+  let headerIdx = lines.findIndex(r => r.some(c => c.includes('이름') || c.includes('국어')));
+  if (headerIdx < 0) headerIdx = 0;
+  parseMockRows(lines, filename, headerIdx);
+}
+
+function parseMockRows(rows, filename, headerIdxOverride) {
+  // 헤더 찾기
+  let hi = headerIdxOverride ?? rows.findIndex(r => r.some(c => String(c).includes('이름') || String(c).includes('국어')));
+  if (hi < 0) hi = 0;
+  const header = rows[hi].map(c => String(c));
+
+  const monthMatch = filename.match(/(\d{2})_회|(\d+)월/);
+  const month = monthMatch ? (monthMatch[1] || monthMatch[2]) + '월' : filename.replace(/[^0-9]/g,'').slice(0,2) + '월';
+
+  const nameIdx = header.findIndex(h => h.includes('이름'));
+  const numIdx  = header.findIndex(h => h.includes('번호'));
+  const koIdx   = header.findIndex(h => h.includes('국어'));
+  const maIdx   = header.findIndex(h => h.includes('수학'));
+  const enIdx   = header.findIndex(h => h.includes('영어'));
+  const hiIdx   = header.findIndex(h => h.includes('한국사'));
+  const ta1Idx  = header.findIndex(h => h.includes('탐구1점수') || (h.includes('탐구') && h.includes('1')));
+  const ta2Idx  = header.findIndex(h => h.includes('탐구2점수') || (h.includes('탐구') && h.includes('2')));
+  const totIdx  = header.findIndex(h => h.includes('총점'));
+  const ta1SubIdx = header.findIndex(h => h.includes('탐구1과목'));
+  const ta2SubIdx = header.findIndex(h => h.includes('탐구2과목'));
+
+  rows.slice(hi + 1).forEach(row => {
+    const name = String(row[nameIdx] || '').trim();
+    if (!name || name === '이름') return;
+    if (!state.students[name]) state.students[name] = { mock: [], neis: null, setech: '', memo: '' };
+
+    // 중복 월 방지
+    const existing = state.students[name].mock.find(m => m.month === month);
+    const scores = {
+      국어: +row[koIdx] || 0,
+      수학: +row[maIdx] || 0,
+      영어: +row[enIdx] || 0,
+      한국사: +row[hiIdx] || 0,
+      탐구1: +(row[ta1Idx]) || 0,
+      탐구2: +(row[ta2Idx]) || 0,
+      탐구1과목: ta1SubIdx >= 0 ? String(row[ta1SubIdx]||'') : '',
+      탐구2과목: ta2SubIdx >= 0 ? String(row[ta2SubIdx]||'') : '',
+      총점: +row[totIdx] || 0,
+      번호: numIdx >= 0 ? String(row[numIdx]||'') : '',
+    };
+    if (scores.총점 === 0) {
+      scores.총점 = scores.국어 + scores.수학 + scores.영어 + scores.한국사 + scores.탐구1 + scores.탐구2;
+    }
+    if (existing) { Object.assign(existing, { month, scores }); }
+    else state.students[name].mock.push({ month, scores });
+    if (state.memos[name]) state.students[name].memo = state.memos[name];
+  });
+
+  updatePill('pill-mock', '모의 ' + getUniqMonths() + '회');
+  rebuildList();
+  showToast('✅ ' + month + ' 모의고사 로드 완료');
+}
+
+// ─── NEIS PARSER ───
+function parseNeisCSV(lines) { parseNeisRows(lines); }
+function parseNeisRows(rows) {
+  // 번호 성명 학년 학기 교과 과목 학점 원점수/과목평균 성취도 형식
+  let found = 0;
+  rows.forEach(row => {
+    const r = row.map(c => String(c).trim());
+    const nameIdx = 1; // 보통 2번째
+    const gradeIdx = r.findIndex(c => ['A','B','C','D','E'].includes(c));
+    const name = r[nameIdx];
+    if (!name || name.length < 2 || name.length > 5) return;
+    if (!['A','B','C','D','E'].includes(r[gradeIdx])) return;
+
+    const subj = r[5] || r[4] || '';
+    const sem  = r[3] || '';
+    const grade = r[gradeIdx] || '';
+    if (!grade || !subj) return;
+
+    if (!state.neisData[name]) state.neisData[name] = {};
+    const key = subjKey(subj, sem);
+    if (key) { state.neisData[name][key] = grade; found++; }
+  });
+  // students에 반영
+  Object.keys(state.neisData).forEach(name => {
+    if (!state.students[name]) state.students[name] = { mock:[], neis:null, setech:'', memo:'' };
+    state.students[name].neis = state.neisData[name];
+  });
+  updatePill('pill-neis', 'NEIS ' + Object.keys(state.neisData).length + '명');
+  rebuildList();
+  showToast('✅ 내신 데이터 로드 완료');
+}
+
+function subjKey(subj, sem) {
+  const s = String(subj);
+  const semester = String(sem);
+  const sfx = semester === '2' || semester.includes('2') ? '2' : '1';
+  if (s.includes('국어') || s.includes('공통국어')) return '국어' + sfx;
+  if (s.includes('수학') || s.includes('공통수학')) return '수학' + sfx;
+  if (s.includes('영어') || s.includes('공통영어')) return '영어' + sfx;
+  if (s.includes('통합사회') || s.includes('사회')) return '사회' + sfx;
+  if (s.includes('통합과학') || s.includes('과학')) return '과학' + sfx;
+  if (s.includes('한국사')) return '한국사' + sfx;
+  return null;
+}
+
+// ─── SETECH PARSER ───
+function parseSetechRows(rows) {
+  // 이름 + 세특 텍스트 추출
+  let nameCol = -1, textCol = -1;
+  rows.forEach((row, ri) => {
+    if (ri > 5) return;
+    row.forEach((c, ci) => {
+      if (String(c).includes('성  명') || String(c).includes('성명')) nameCol = ci;
+      if (String(c).includes('세부능력') || String(c).includes('특기사항')) textCol = ci;
+    });
+  });
+  if (nameCol < 0) nameCol = 1;
+  if (textCol < 0) textCol = 3;
+
+  let currentName = '';
+  rows.forEach(row => {
+    const name = String(row[nameCol] || '').trim();
+    const text = String(row[textCol] || '').trim();
+    if (name && name.length >= 2 && name.length <= 5 && !/^\d+$/.test(name)) currentName = name;
+    if (currentName && text && text.length > 10) {
+      if (!state.setechData[currentName]) state.setechData[currentName] = '';
+      state.setechData[currentName] += text + '\n';
+    }
+  });
+  Object.keys(state.setechData).forEach(name => {
+    if (!state.students[name]) state.students[name] = { mock:[], neis:null, setech:'', memo:'' };
+    state.students[name].setech = state.setechData[name];
+  });
+  updatePill('pill-setech', '세특 ' + Object.keys(state.setechData).length + '명');
+  rebuildList();
+  showToast('✅ 세특 데이터 로드 완료');
+}
+
+// ─── ROSTER PARSER ───
+function parseRosterRows(rows) {
+  rows.forEach(row => {
+    const name = String(row[1] || row[0] || '').trim();
+    const num = String(row[0] || '').trim();
+    if (!name || name.length < 2) return;
+    if (!state.students[name]) state.students[name] = { mock:[], neis:null, setech:'', memo:'' };
+  });
+  updatePill('pill-roster', '명단 ' + Object.keys(state.students).length + '명');
+  rebuildList();
+  showToast('✅ 명단 로드 완료');
+}
+
+// ──────────────────────────────────────────────
+// HELPERS
+// ──────────────────────────────────────────────
+function getUniqMonths() {
+  const months = new Set();
+  Object.values(state.students).forEach(s => s.mock.forEach(m => months.add(m.month)));
+  return months.size;
+}
+
+function getMockSorted(name) {
+  const stu = state.students[name];
+  if (!stu) return [];
+  return [...stu.mock].sort((a,b) => {
+    const toNum = m => parseInt(m.month) || 0;
+    return toNum(a.month) - toNum(b.month);
+  });
+}
+
+function allTotals() {
+  const result = {};
+  Object.keys(state.students).forEach(name => {
+    const mocks = getMockSorted(name);
+    if (mocks.length > 0) result[name] = mocks[mocks.length - 1].scores.총점;
+  });
+  return result;
+}
+
+function rankIn(name) {
+  const totals = allTotals();
+  const sorted = Object.values(totals).sort((a,b) => b-a);
+  const myTotal = totals[name];
+  if (myTotal === undefined) return null;
+  const rank = sorted.indexOf(myTotal) + 1;
+  return { rank, total: sorted.length, pct: Math.round((rank / sorted.length) * 100) };
+}
+
+function subjectRank(name, subj, mockList) {
+  if (!mockList || mockList.length === 0) return null;
+  const lastMonth = mockList[mockList.length-1].month;
+  const vals = Object.keys(state.students).map(n => {
+    const m = state.students[n].mock.find(x => x.month === lastMonth);
+    return m ? m.scores[subj] : null;
+  }).filter(v => v !== null).sort((a,b) => b-a);
+  const myM = state.students[name]?.mock.find(x => x.month === lastMonth);
+  if (!myM) return null;
+  const myVal = myM.scores[subj];
+  const rank = vals.indexOf(myVal) + 1;
+  return { rank, total: vals.length, pct: Math.round((rank/vals.length)*100) };
+}
+
+function avatarColor(name) {
+  const colors = ['#2D5BE3','#1A7F5A','#9B5A00','#5B3DB8','#C0392B','#1A5276','#6C3483'];
+  let hash = 0;
+  for (const c of name) hash = (hash * 31 + c.charCodeAt(0)) % colors.length;
+  return colors[hash];
+}
+
+function getGradeClass(g) { return 'g-' + (g || '?'); }
+function diffClass(d) { return d > 0 ? 'up' : d < 0 ? 'dn' : 'flat'; }
+function diffText(d) { return d > 0 ? '▲'+d : d < 0 ? '▼'+Math.abs(d) : '—'; }
+
+// ──────────────────────────────────────────────
+// UI RENDERING
+// ──────────────────────────────────────────────
+function updatePill(id, text) {
+  const el = document.getElementById(id);
+  el.textContent = text;
+  el.className = 'pill loaded';
+}
+
+function rebuildList(filter = '') {
+  const names = Object.keys(state.students).filter(n => n.includes(filter)).sort((a,b)=>a.localeCompare(b,'ko'));
+  const list = document.getElementById('studentList');
+  if (!names.length) {
+    list.innerHTML = '<div style="padding:20px 18px;font-size:12px;color:var(--text3);text-align:center;line-height:1.6">파일을 업로드하면<br>학생 목록이 표시됩니다</div>';
+    return;
+  }
+  const totals = allTotals();
+  list.innerHTML = names.map(name => {
+    const mocks = getMockSorted(name);
+    const lastTotal = mocks.length > 0 ? mocks[mocks.length-1].scores.총점.toFixed(1) : '—';
+    const prevTotal = mocks.length > 1 ? mocks[mocks.length-2].scores.총점 : null;
+    const lastVal = mocks.length > 0 ? mocks[mocks.length-1].scores.총점 : null;
+    const trend = (lastVal !== null && prevTotal !== null) ? (lastVal >= prevTotal ? '▲' : '▼') : '';
+    const trendColor = trend === '▲' ? 'var(--green)' : trend === '▼' ? 'var(--red)' : '';
+    const col = avatarColor(name);
+    const active = state.selectedName === name ? ' active' : '';
+    return `<div class="student-item${active}" onclick="selectStudent('${name}')">
+      <div class="stu-avatar" style="background:${col}20;color:${col}">${name.slice(0,1)}</div>
+      <div class="stu-info">
+        <div class="stu-name">${name}</div>
+        <div class="stu-score">총점 ${lastTotal} <span style="color:${trendColor}">${trend}</span></div>
+      </div>
+    </div>`;
+  }).join('');
+
+  // 학생 있으면 업로드 화면 숨기고 사이드 검색 표시
+  document.getElementById('sideSearch').style.display = names.length ? 'block' : 'none';
+  document.getElementById('classLabel').textContent = `${names.length}명 로드됨`;
+
+  if (!state.selectedName && names.length) {
+    selectStudent(names[0]);
+  }
+}
+
+function filterStudents(v) { rebuildList(v); }
+
+function selectStudent(name) {
+  state.selectedName = name;
+  document.querySelectorAll('.student-item').forEach(el => el.classList.toggle('active', el.textContent.trim().startsWith(name.slice(0,1)) && el.querySelector('.stu-name')?.textContent === name));
+  rebuildList(document.getElementById('searchBox')?.value || '');
+
+  const stu = state.students[name];
+  document.getElementById('welcomeScreen').style.display = 'none';
+  const ds = document.getElementById('detailScreen');
+  ds.style.display = 'flex';
+
+  const mocks = getMockSorted(name);
+  const rk = rankIn(name);
+  document.getElementById('tbName').textContent = name;
+  document.getElementById('tbMeta').textContent =
+    `모의고사 ${mocks.length}회 데이터${rk ? ` · 반 ${rk.rank}위/${rk.total}명` : ''}${stu.neis ? ' · 내신 연동' : ''}${stu.setech ? ' · 세특 연동' : ''}`;
+
+  renderContent();
+}
+
+function switchTab(tab, el) {
+  state.currentTab = tab;
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  if (el) el.classList.add('active');
+  renderContent();
+}
+
+function renderContent() {
+  const name = state.selectedName;
+  if (!name) return;
+  const content = document.getElementById('mainContent');
+  const t = state.currentTab;
+  if (t === 'score') renderScore(content, name);
+  else if (t === 'neis') renderNeis(content, name);
+  else if (t === 'setech') renderSetech(content, name);
+  else if (t === 'ai') renderAI(content, name);
+  else if (t === 'memo') renderMemo(content, name);
+}
+
+// ─── SCORE TAB ───
+function renderScore(content, name) {
+  const mocks = getMockSorted(name);
+  if (!mocks.length) {
+    content.innerHTML = `<div class="empty-state"><div class="empty-icon">📊</div><div class="empty-title">모의고사 데이터 없음</div><div class="empty-body">모의고사 파일을 업로드하면 성적이 표시됩니다</div></div>`;
+    return;
+  }
+  const last = mocks[mocks.length - 1];
+  const prev = mocks.length > 1 ? mocks[mocks.length - 2] : null;
+  const subjects = ['국어','수학','영어','한국사','탐구1','탐구2'];
+  const maxes = {국어:100,수학:100,영어:100,한국사:50,탐구1:50,탐구2:50};
+
+  const scoreGrid = subjects.map(s => {
+    const lv = last.scores[s] || 0;
+    const pv = prev?.scores[s] || 0;
+    const diff = prev ? lv - pv : null;
+    const max = maxes[s];
+    const pct = max ? Math.round((lv/max)*100) : 0;
+    const col = pct >= 80 ? 'var(--green)' : pct >= 60 ? 'var(--accent)' : pct >= 40 ? 'var(--amber)' : 'var(--red)';
+    const lbl = s === '탐구1' ? '탐구①' : s === '탐구2' ? '탐구②' : s;
+    return `<div class="score-cell">
+      <div class="score-subj">${lbl}</div>
+      <div class="score-val" style="color:${col}">${lv}</div>
+      <div class="score-diff">
+        ${diff !== null ? `<span class="${diffClass(diff)}">${diffText(diff)}</span>` : ''}
+        ${prev ? `<span style="font-size:9px;color:var(--text3)"> ${prev.scores[s]||0}</span>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+
+  // Chart
+  const chartSubjs = ['국어','수학','영어','한국사'];
+  const chartBars = mocks.map((m, mi) => {
+    const bars = chartSubjs.map(s => {
+      const h = Math.round(((m.scores[s]||0)/100)*70);
+      return `<div class="bar" style="height:${h}px;background:${mi===mocks.length-1?'var(--accent)':'var(--accent-light)';}" title="${m.month} ${s}: ${m.scores[s]}"></div>`;
+    }).join('');
+    return `<div class="bar-grp"><div class="bars">${bars}</div><div class="bar-lbl">${m.month}</div></div>`;
+  });
+  // 과목 레이블 행
+  const chartHtml = `
+    <div style="display:flex;gap:16px;margin-bottom:6px">
+      ${chartSubjs.map(s=>`<div style="flex:1;text-align:center;font-size:10px;color:var(--text3)">${s}</div>`).join('')}
+    </div>
+    <div class="bar-chart">${chartBars.join('')}</div>`;
+
+  // 전체 추이 테이블
+  const trendTable = `
+    <table class="rank-table">
+      <thead><tr><th>회차</th>${subjects.map(s=>`<th>${s}</th>`).join('')}<th>총점</th></tr></thead>
+      <tbody>
+        ${mocks.map(m => `<tr>
+          <td style="color:var(--text2);font-size:11px">${m.month}</td>
+          ${subjects.map(s=>`<td>${m.scores[s]||0}</td>`).join('')}
+          <td style="font-weight:600;color:var(--accent)">${m.scores.총점.toFixed(1)}</td>
+        </tr>`).join('')}
+      </tbody>
+    </table>`;
+
+  // 반 내 순위
+  const rankTable = `
+    <table class="rank-table">
+      <thead><tr><th>과목</th><th>점수</th><th>반 순위</th><th>상위%</th></tr></thead>
+      <tbody>
+        ${['국어','수학','영어'].map(s => {
+          const rk = subjectRank(name, s, mocks);
+          if (!rk) return '';
+          const col = rk.pct <= 20 ? 'var(--green)' : rk.pct <= 50 ? 'var(--accent)' : rk.pct <= 75 ? 'var(--amber)' : 'var(--red)';
+          return `<tr>
+            <td style="font-weight:500;color:var(--text)">${s}</td>
+            <td>${last.scores[s]}</td>
+            <td style="color:${col};font-weight:600">${rk.rank}위 / ${rk.total}명</td>
+            <td style="color:${col}">상위 ${rk.pct}%</td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table>`;
+
+  const rk = rankIn(name);
+
+  content.innerHTML = `
+    <div class="card">
+      <div class="card-hd">
+        <div class="card-label">최근 모의고사 점수 (${last.month})</div>
+        <div style="display:flex;gap:6px;align-items:center">
+          ${rk ? `<span class="chip chip-blue">반 ${rk.rank}위</span>` : ''}
+          ${prev ? `<span class="chip ${last.scores.총점>=prev.scores.총점?'chip-green':'chip-red'}">${last.scores.총점>=prev.scores.총점?'▲':'▼'}${Math.abs((last.scores.총점-prev.scores.총점).toFixed(1))}점</span>` : ''}
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="score-grid">${scoreGrid}</div>
+      </div>
+    </div>
+    ${mocks.length > 1 ? `<div class="card">
+      <div class="card-hd">
+        <div class="card-label">회차별 변화 추이</div>
+        <div class="legend">
+          <div class="leg"><div class="leg-sq" style="background:var(--accent-light)"></div>이전</div>
+          <div class="leg"><div class="leg-sq" style="background:var(--accent)"></div>최근</div>
+        </div>
+      </div>
+      <div class="card-body">${chartHtml}</div>
+    </div>` : ''}
+    <div class="card">
+      <div class="card-hd"><div class="card-label">전체 회차 데이터</div></div>
+      <div class="card-body">${trendTable}</div>
+    </div>
+    ${Object.keys(state.students).length > 1 ? `<div class="card">
+      <div class="card-hd"><div class="card-label">반 내 과목별 위치 (최근 회차)</div></div>
+      <div class="card-body">${rankTable}</div>
+    </div>` : ''}
+  `;
+}
+
+// ─── NEIS TAB ───
+function renderNeis(content, name) {
+  const stu = state.students[name];
+  if (!stu?.neis || Object.keys(stu.neis).length === 0) {
+    content.innerHTML = `<div class="empty-state"><div class="empty-icon">🏫</div><div class="empty-title">내신 데이터 없음</div><div class="empty-body">NEIS 교과학습발달상황 파일을 업로드하면 성취도가 표시됩니다</div></div>`;
+    return;
+  }
+  const n = stu.neis;
+  const subjs = ['국어','수학','영어','사회','과학','한국사'];
+  const sems = ['1','2'];
+
+  const neisRows = sems.map(sem => `
+    <div class="neis-cell row-label">${sem === '1' ? '1학기' : '2학기'}</div>
+    ${subjs.map(s => {
+      const g = n[s + sem] || '-';
+      return `<div class="neis-cell"><span class="${getGradeClass(g)}">${g}</span></div>`;
+    }).join('')}
+  `).join('');
+
+  // 강약점
+  const analysis = subjs.map(s => {
+    const g1 = n[s+'1'], g2 = n[s+'2'];
+    const gradeOrder = ['A','B','C','D','E'];
+    const i1 = gradeOrder.indexOf(g1 || 'E');
+    const i2 = gradeOrder.indexOf(g2 || 'E');
+    const trend = i2 < i1 ? '향상' : i2 > i1 ? '하락' : '유지';
+    const chipClass = trend === '향상' ? 'chip-green' : trend === '하락' ? 'chip-red' : 'chip-gray';
+    if (!g1 && !g2) return '';
+    return `<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border)">
+      <div style="font-size:12px;font-weight:500">${s}</div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <span class="${getGradeClass(g1||'?')}" style="font-size:13px;font-family:var(--mono)">${g1||'?'}</span>
+        <span style="color:var(--text3);font-size:10px">→</span>
+        <span class="${getGradeClass(g2||'?')}" style="font-size:13px;font-family:var(--mono)">${g2||'?'}</span>
+        <span class="chip ${chipClass}">${trend}</span>
+      </div>
+    </div>`;
+  }).join('');
+
+  content.innerHTML = `
+    <div class="card">
+      <div class="card-hd"><div class="card-label">교과 성취도 (NEIS)</div></div>
+      <div class="card-body">
+        <div class="neis-grid">
+          <div class="neis-cell header">학기</div>
+          ${subjs.map(s=>`<div class="neis-cell header">${s}</div>`).join('')}
+          ${neisRows}
+        </div>
+        <div style="margin-top:10px;font-size:10px;color:var(--text3)">
+          A: 상위 20% &nbsp; B: 20~40% &nbsp; C: 40~60% &nbsp; D: 60~80% &nbsp; E: 80% 이하
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-hd"><div class="card-label">과목별 1~2학기 변화</div></div>
+      <div class="card-body">${analysis}</div>
+    </div>
+  `;
+}
+
+// ─── SETECH TAB ───
+function renderSetech(content, name) {
+  const stu = state.students[name];
+  if (!stu?.setech) {
+    content.innerHTML = `<div class="empty-state"><div class="empty-icon">📝</div><div class="empty-title">세특 데이터 없음</div><div class="empty-body">세부능력특기사항 파일을 업로드하면 내용이 표시됩니다</div></div>`;
+    return;
+  }
+  content.innerHTML = `
+    <div class="card">
+      <div class="card-hd"><div class="card-label">세부능력 및 특기사항</div></div>
+      <div class="card-body">
+        <div style="font-size:12px;line-height:1.85;color:var(--text);white-space:pre-wrap;max-height:400px;overflow-y:auto">${stu.setech}</div>
+      </div>
+    </div>`;
+}
+
+// ─── AI TAB ───
+function renderAI(content, name) {
+  if (state.aiCache[name]) {
+    content.innerHTML = buildAIHtml(state.aiCache[name]);
+    return;
+  }
+  content.innerHTML = `
+    <div class="card">
+      <div class="card-body" style="text-align:center;padding:32px">
+        <div style="font-size:32px;margin-bottom:12px">✦</div>
+        <div style="font-size:14px;font-weight:600;color:var(--text);margin-bottom:8px">AI 심층 분석</div>
+        <div style="font-size:12px;color:var(--text3);margin-bottom:20px;line-height:1.7">
+          성적 변화 해석, 강·약점 분석, 세특 로드맵,<br>단기·중기 변화 목표를 자동 생성합니다
+        </div>
+        <button class="btn primary" onclick="generateAI()">✦ ${name} AI 분석 생성</button>
+      </div>
+    </div>`;
+}
+
+function buildAIHtml(data) {
+  const sections = [
+    { key:'성적해석', label:'성적 변화 해석', cls:'ai-sec-score' },
+    { key:'강약점', label:'강·약점 분석', cls:'ai-sec-strength' },
+    { key:'세특로드맵', label:'세특 활동 로드맵', cls:'ai-sec-setech' },
+    { key:'변화목표', label:'상담 변화 목표', cls:'ai-sec-goal' },
+  ];
+  return sections.map(sec => {
+    const pts = data[sec.key] || [];
+    return `<div class="card ai-section ${sec.cls}">
+      <div class="card-hd"><div class="card-label ai-section-hd ${sec.cls}">${sec.label}</div></div>
+      <div class="card-body">
+        ${pts.map((p,i) => `<div class="ai-point"><span class="ai-num">0${i+1}</span><div>${p}</div></div>`).join('')}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function generateAI() {
+  const name = state.selectedName;
+  if (!name) return;
+  const btn = document.getElementById('aiBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> 분석 중...';
+
+  state.currentTab = 'ai';
+  document.querySelectorAll('.tab').forEach((t,i) => t.classList.toggle('active', i===3));
+
+  const stu = state.students[name];
+  const mocks = getMockSorted(name);
+  const rk = rankIn(name);
+
+  const mockSummary = mocks.map(m =>
+    `${m.month}: 국어${m.scores.국어} 수학${m.scores.수학} 영어${m.scores.영어} 한국사${m.scores.한국사} 탐구${m.scores.탐구1+m.scores.탐구2} 총점${m.scores.총점.toFixed(1)}`
+  ).join(' / ');
+
+  const neisSummary = stu.neis ? Object.entries(stu.neis).map(([k,v])=>`${k}:${v}`).join(' ') : '없음';
+  const setechSummary = stu.setech ? stu.setech.slice(0, 400) : '없음';
+  const memo = stu.memo || '';
+
+  const prompt = `당신은 고등학교 담임 교사의 학생 성적 분석 도우미입니다.
+아래 데이터를 바탕으로 학생 ${name}에 대한 심층 분석을 JSON으로 작성하세요.
+
+[모의고사 원점수 추이]
+${mockSummary || '데이터 없음'}
+${rk ? `반 내 순위: ${rk.rank}위/${rk.total}명 (상위 ${rk.pct}%)` : ''}
+
+[내신 성취도]
+${neisSummary}
+
+[세특 발췌]
+${setechSummary}
+
+[담임 메모]
+${memo}
+
+다음 JSON 형식으로만 응답 (마크다운 없이, JSON만):
+{
+  "성적해석": ["변화 해석 1 (구체적 수치 포함)", "주목할 과목/패턴 2", "내신 vs 모의 비교 3"],
+  "강약점": ["강점 1 (근거 포함)", "약점 2 (구체적)", "보완 우선순위 3"],
+  "세특로드맵": ["세특 주제 추천 1 (과목+주제+방향)", "탐구보고서 아이디어 2", "연계 활동 추천 3"],
+  "변화목표": ["단기 목표 1 (다음 시험까지)", "중기 목표 2 (학기말)", "담임 상담 핵심 메시지 3"]
+}`;
+
+  const content = document.getElementById('mainContent');
+  content.innerHTML = `<div class="card"><div class="card-body" style="display:flex;align-items:center;gap:10px;padding:20px;color:var(--text3);font-size:13px"><span class="spinner"></span>${name} 학생 데이터 분석 중...</div></div>`;
+
+  try {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 1200,
+        messages: [{ role: 'user', content: prompt }]
+      })
+    });
+    const data = await res.json();
+    const text = data.content.map(i => i.text || '').join('');
+    const clean = text.replace(/```json|```/g, '').trim();
+    const parsed = JSON.parse(clean);
+    state.aiCache[name] = parsed;
+    content.innerHTML = buildAIHtml(parsed);
+  } catch (e) {
+    content.innerHTML = `<div class="card"><div class="card-body" style="color:var(--red);font-size:13px">분석 오류가 발생했습니다. 다시 시도해주세요.</div></div>`;
+  }
+  btn.disabled = false;
+  btn.innerHTML = '✦ AI 재분석';
+}
+
+// ─── MEMO TAB ───
+function renderMemo(content, name) {
+  const stu = state.students[name];
+  const memo = stu?.memo || '';
+  content.innerHTML = `
+    <div class="card">
+      <div class="card-hd">
+        <div class="card-label">담임 상담 메모</div>
+        <button class="btn" onclick="saveMemo('${name}')" style="font-size:11px;padding:4px 10px">저장</button>
+      </div>
+      <div class="card-body">
+        <textarea class="memo-input" id="memoText" placeholder="진로 희망, 상담 내용, 특이사항, 학부모 연락 내용 등을 자유롭게 기록하세요...">${memo}</textarea>
+        <div style="margin-top:8px;font-size:11px;color:var(--text3)">💡 이 메모는 AI 분석 생성 시 활용됩니다</div>
+      </div>
+    </div>
+    ${memo ? `<div class="card">
+      <div class="card-hd"><div class="card-label">미리보기</div></div>
+      <div class="card-body"><div class="memo-box">${memo.replace(/\n/g,'<br>')}</div></div>
+    </div>` : ''}
+  `;
+}
+
+function saveMemo(name) {
+  const text = document.getElementById('memoText')?.value || '';
+  if (!state.students[name]) return;
+  state.students[name].memo = text;
+  state.memos[name] = text;
+  delete state.aiCache[name]; // 메모 변경 시 AI 캐시 삭제
+  showToast('✅ 메모가 저장되었습니다');
+  renderMemo(document.getElementById('mainContent'), name);
+}
+
+function showUploadScreen() {
+  document.getElementById('welcomeScreen').style.display = 'block';
+  document.getElementById('detailScreen').style.display = 'none';
+}
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2800);
+}
+</script>
+</body>
+</html>
