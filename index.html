@@ -372,6 +372,7 @@ const GRADE_TO_NUM = { A:5, B:4, C:3, D:2, E:1 };  // 높을수록 좋음
 const NEXT_GRADE   = { E:'D', D:'C', C:'B', B:'A', A:null };
 const GRADE_RANGE  = { A:'상위 20% 이내', B:'상위 20~40%', C:'상위 40~60%', D:'상위 60~80%', E:'하위 20%' };
 const GRADE_NEXT_DESC = { E:'D등급: 상위 80% → 60% 필요', D:'C등급: 상위 60% → 40% 필요', C:'B등급: 상위 40% → 20% 필요', B:'A등급: 상위 20% 이내 진입 필요', A:null };
+const KOREAN_NAME_RE = /^[가-힣]{2,5}$/;
 
 const KO_STOP = new Set([
   '의','을','를','이','가','은','는','에','서','에서','으로','로','와','과','도','만','한',
@@ -540,6 +541,28 @@ function matchCareer(keywords) {
   return result.sort((a,b) => b.matched.length - a.matched.length);
 }
 
+function parseScorePack(raw) {
+  const s=String(raw||'').trim();
+  const nums=[...s.matchAll(/\d+(?:\.\d+)?/g)].map(m=>m[0]);
+  return {
+    raw: nums[0] || '',
+    avg: nums[1] || '',
+    std: nums[2] || '',
+    text: s,
+  };
+}
+
+function cleanSetechText(text) {
+  return String(text||'')
+    .replace(/\s+/g,' ')
+    .replace(/^(세부능력\s*및\s*특기사항|세부능력특기사항|특기사항|세특)\s*[:：-]?\s*/,'')
+    .trim();
+}
+
+function isLikelyName(v) {
+  return KOREAN_NAME_RE.test(String(v||'').trim());
+}
+
 // ── FILE LOADING ───────────────────────────────
 function handleSidebarUpload(e) { Array.from(e.target.files).forEach(f => guessAndLoad(f)); }
 function guessAndLoad(file) {
@@ -579,11 +602,11 @@ async function loadPDF(file, type) {
     const rows = fullText.split('\n').map(line => line.split('\t').map(s => s.trim()));
     if (type==='mock') parseMockRows(rows, file.name);
     else if (type==='neis') parseNeisRows(rows, file.name);
-    else if (type==='setech') parseSetechRows(rows, file.name);
+    else if (type==='setech') parseSetechText(fullText, file.name, rows);
     else if (type==='roster') parseRosterRows(rows, file.name);
     else {
       const n = file.name.toLowerCase();
-      if (n.includes('세특')||n.includes('세부능력')) parseSetechRows(rows, file.name);
+      if (n.includes('세특')||n.includes('세부능력')) parseSetechText(fullText, file.name, rows);
       else if (n.includes('neis')||n.includes('내신')||n.includes('교과')) parseNeisRows(rows, file.name);
       else parseMockRows(rows, file.name);
     }
@@ -597,8 +620,13 @@ function parseCSV(text, type, filename) {
   else if (type==='roster') parseRosterRows(lines, filename);
 }
 function parseXLSX(wb, type, filename) {
-  const ws = wb.Sheets[wb.SheetNames[0]];
-  const rows = XLSX.utils.sheet_to_json(ws, { header:1, defval:'' });
+  const rows = (type==='neis' || type==='setech')
+    ? wb.SheetNames.flatMap(sn => {
+        const ws = wb.Sheets[sn];
+        const rs = XLSX.utils.sheet_to_json(ws, { header:1, defval:'' });
+        return rs.length ? [['__SHEET__', sn], ...rs] : [];
+      })
+    : XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header:1, defval:'' });
   if (type==='mock') parseMockRows(rows, filename);
   else if (type==='neis') parseNeisRows(rows, filename);
   else if (type==='setech') parseSetechRows(rows, filename);
@@ -700,7 +728,7 @@ function parseNeisRows(rows, filename) {
   rows.slice(dataStart).forEach((row, rowIdx) => {
     const r = row.map(c => String(c).trim());
 
-    let name, num, year, sem, eduCat, subject, rawScore, grade, rank;
+    let name, num, year, sem, eduCat, subject, rawScore, subjectAvg, stdDev, achievement, grade, rank;
 
     if (headerFound) {
       name     = r[nameCol]     || '';
@@ -709,13 +737,15 @@ function parseNeisRows(rows, filename) {
       sem      = semCol>=0      ? r[semCol]     : '';
       eduCat   = eduCatCol>=0   ? r[eduCatCol]  : '';
       subject  = subjCol>=0     ? r[subjCol]    : '';
-      // 원점수 처리: "85/75.3(10.2)" → "85", "85" → "85"
       const rawRaw = rawCol>=0 ? r[rawCol] : '';
-      rawScore = String(rawRaw).match(/^[\d.]+/)?.[0] || '';
-      // 성취도 처리: "A(120)" → "A", "B" → "B"
+      const scorePack = parseScorePack(rawRaw);
+      rawScore = scorePack.raw;
+      subjectAvg = scorePack.avg;
+      stdDev = scorePack.std;
       const gradeRaw = gradeCol>=0 ? r[gradeCol] : (r.find(c => /^[A-E]/.test(c)) || '');
-      grade    = String(gradeRaw).match(/^[A-E]/)?.[0] || '';
-      rank     = rankCol>=0     ? r[rankCol]    : '';
+      achievement = String(gradeRaw).match(/[A-E]/)?.[0] || '';
+      grade    = achievement;
+      rank     = rankCol>=0 ? (String(r[rankCol]||'').match(/[1-9]/)?.[0] || String(r[rankCol]||'')) : '';
     } else {
       // 헤더 없는 파일 폴백 (NEIS 기본 컬럼 순서 가정)
       // 학번|성명|학년|학기|교과|과목|단위수|원점수...|성취도...|석차등급
@@ -728,16 +758,20 @@ function parseNeisRows(rows, filename) {
       eduCat   = r[4] || '';
       subject  = r[5] || r[4] || '';
       const gradeRaw = r[gradeIdx];
-      grade    = String(gradeRaw).match(/^[A-E]/)?.[0] || '';
+      achievement = String(gradeRaw).match(/[A-E]/)?.[0] || '';
+      grade    = achievement;
       const rawRaw = r.slice(5, gradeIdx).find(c => /^\d/.test(c)) || '';
-      rawScore = String(rawRaw).match(/^[\d.]+/)?.[0] || '';
-      rank     = r.slice(gradeIdx+1).find(c => /^[1-9]$/.test(c)) || '';
+      const scorePack = parseScorePack(rawRaw);
+      rawScore = scorePack.raw;
+      subjectAvg = scorePack.avg;
+      stdDev = scorePack.std;
+      rank     = r.slice(gradeIdx+1).map(c=>String(c||'').trim()).find(c => /^[1-9]/.test(c)) || '';
     }
 
     if (rowIdx < 3) diagnoseRows.push(r.join(' | '));
 
     // 검증
-    if (!name || name.length<2 || name.length>5 || /^\d+$/.test(name)) return;
+    if (!isLikelyName(name)) return;
     if (!grade || !/^[A-E]$/.test(grade)) return;
     if (!subject) return;
 
@@ -754,11 +788,19 @@ function parseNeisRows(rows, filename) {
     // 연도: NEIS 학년 컬럼은 "1","2","3" 또는 "1학년" 형태
     const yearNorm = String(year).match(/[1-3]/)?.[0] || '';
     const dup = state.students[name].neisDetail.find(d => d.subject===subject && d.semester===semStr && (d.year||'')===(yearNorm||''));
-    if (!dup) {
+    const detailPayload = {
+      subject, eduCat, semester: semStr, grade, year: yearNorm,
+      rawScore: rawScore ? String(rawScore) : '',
+      subjectAvg: subjectAvg ? String(subjectAvg) : '',
+      stdDev: stdDev ? String(stdDev) : '',
+      achievement: achievement || grade || '',
+      rank:     rank     ? String(rank)     : '',
+    };
+    if (dup) {
+      Object.assign(dup, detailPayload);
+    } else {
       state.students[name].neisDetail.push({
-        subject, eduCat, semester: semStr, grade, year: yearNorm,
-        rawScore: rawScore ? String(rawScore) : '',
-        rank:     rank     ? String(rank)     : '',
+        ...detailPayload
       });
     }
     parsedCount++;
@@ -808,17 +850,19 @@ function subjKey(subj, sem) {
 function parseSetechRows(rows, filename) {
   let nameCol=-1, numCol=-1, textCol=-1, subjectCol=-1, yearCol=-1, semCol=-1;
 
-  // ① 헤더 행 탐색 (최대 7행)
+  // ① 헤더 행 탐색
   let headerRowIdx = -1;
-  for (let ri = 0; ri <= Math.min(6, rows.length-1); ri++) {
+  for (let ri = 0; ri <= Math.min(50, rows.length-1); ri++) {
     const row = rows[ri];
     let foundName=false, foundText=false;
     row.forEach((c, ci) => {
-      const s = String(c).trim();
-      if (s.includes('성명') || s.includes('성  명')) { nameCol=ci; foundName=true; }
+      const s = String(c).replace(/\s+/g,'').trim();
+      if (s.includes('성명') || s.includes('학생명') || s==='이름') { nameCol=ci; foundName=true; }
       if (s.includes('학번') || s.includes('번호')) numCol=ci;
-      if (s.includes('세부능력') || s.includes('특기사항'))  { textCol=ci; foundText=true; }
-      if ((s.includes('과목') || s.includes('교과')) && ci!==nameCol) subjectCol=ci;
+      if (s.includes('세부능력') || s.includes('특기사항') || s.includes('세특'))  { textCol=ci; foundText=true; }
+      if ((s.includes('과목') || s.includes('교과')) && ci!==nameCol) {
+        if (subjectCol<0 || s.includes('과목')) subjectCol=ci;
+      }
       if (s.includes('학년') && !s.includes('도'))  yearCol=ci;
       if (s.includes('학기'))                        semCol=ci;
     });
@@ -832,11 +876,11 @@ function parseSetechRows(rows, filename) {
     for (let ri = (headerRowIdx >= 0 ? headerRowIdx+1 : 0); ri < Math.min(rows.length, 20); ri++) {
       const r = rows[ri];
       const n = String(r[nameCol]||'').trim();
-      if (n.length < 2 || n.length > 5 || /^\d+$/.test(n)) continue;
+      if (!isLikelyName(n)) continue;
       let maxLen = 0, maxIdx = -1;
       r.forEach((c, ci) => {
         const l = String(c).trim().length;
-        if (l > maxLen && ci !== nameCol) { maxLen=l; maxIdx=ci; }
+        if (l > maxLen && ci !== nameCol && ci !== numCol) { maxLen=l; maxIdx=ci; }
       });
       if (maxLen >= 20) { textCol=maxIdx; break; }
     }
@@ -846,13 +890,16 @@ function parseSetechRows(rows, filename) {
   //    학번(0)|성명(1)|학년(2)|학기(3)|교과(4)|과목(5)|세부능력및특기사항(6)
   if (nameCol < 0) nameCol = 1;
 
-  // 텍스트열 끝까지 못 찾으면 파싱 불가 → 진단 정보 저장 후 반환
+  // 텍스트열 끝까지 못 찾으면 PDF/비정형 텍스트 방식으로 한 번 더 시도
   if (textCol < 0) {
     const sample = rows.slice(0,3).map(r=>r.join('|')).join('\n');
-    state.setechParseInfo = { error: '텍스트열 미탐지', sample, filename };
-    showToast('⚠️ 세특 텍스트 열을 찾지 못했습니다. 세특·진로 탭에서 진단 정보를 확인하세요.');
+    const text = rows.map(r=>r.join(' ')).join('\n');
+    const recovered = parseSetechText(text, filename, rows, true);
+    if (recovered > 0) return;
+    state.setechParseInfo = { error: '텍스트열 미탐지', sample, filename, nameCol, textCol, subjectCol };
+    showToast('⚠️ 세특 텍스트 열을 찾지 못했습니다. 파일 형식 또는 학생명 표시를 확인해주세요.');
     state.uploadedFiles.setech = { name:filename, count:0, error:true };
-    updateFileStatus();
+    updateFileStatus(); saveToStorage();
     return;
   }
 
@@ -869,14 +916,15 @@ function parseSetechRows(rows, filename) {
     const yr      = yearCol>=0    ? String(row[yearCol]||'').trim()    : '';
     const sm      = semCol>=0     ? String(row[semCol]||'').trim()     : '';
 
-    if (name && name.length>=2 && name.length<=5 && !/^\d+$/.test(name)) curName=name;
+    if (isLikelyName(name)) curName=name;
     if (subject && subject.length>=1 && subject!==curName) curSubject=subject;
     if (yr) curYear=yr;
     if (sm) curSem=sm;
-    if (!curName || !text || text.length<10) return;
+    const cleanText = cleanSetechText(text);
+    if (!curName || !cleanText || cleanText.length<8) return;
 
     if (!state.setechData[curName]) state.setechData[curName]='';
-    state.setechData[curName] += text+'\n';
+    state.setechData[curName] += cleanText+'\n';
     if (!state.students[curName]) state.students[curName]={ mock:[], neis:null, neisDetail:[], setech:'', setechSubs:[], memo:'', num:'' };
     if (num && !state.students[curName].num) state.students[curName].num=num;
     state.students[curName].setech = state.setechData[curName];
@@ -885,8 +933,8 @@ function parseSetechRows(rows, filename) {
     if (curSubject && subjectCol>=0) {
       if (!state.students[curName].setechSubs) state.students[curName].setechSubs=[];
       const existing = state.students[curName].setechSubs.find(s => s.subject===curSubject);
-      if (existing) existing.text += text+'\n';
-      else state.students[curName].setechSubs.push({ subject:curSubject, text:text+'\n', year:curYear, sem:curSem });
+      if (existing) existing.text += cleanText+'\n';
+      else state.students[curName].setechSubs.push({ subject:curSubject, text:cleanText+'\n', year:curYear, sem:curSem });
     }
     parsedCount++;
   });
@@ -905,6 +953,97 @@ function parseSetechRows(rows, filename) {
     showToast('✅ 세특 로드 완료 · '+cnt+'명 ('+parsedCount+'행)');
   }
   rebuildList(); updateFileStatus(); saveToStorage();
+}
+
+function addSetechEntry(name, text, subject, year, sem, num) {
+  if (!isLikelyName(name)) return false;
+  const cleanText = cleanSetechText(text);
+  if (!cleanText || cleanText.length < 8) return false;
+  if (!state.setechData[name]) state.setechData[name]='';
+  if (state.setechData[name].includes(cleanText.slice(0,40))) return false;
+  state.setechData[name] += cleanText+'\n';
+  if (!state.students[name]) state.students[name]={ mock:[], neis:null, neisDetail:[], setech:'', setechSubs:[], memo:'', num:'' };
+  if (num && !state.students[name].num) state.students[name].num=String(num);
+  state.students[name].setech = state.setechData[name];
+  if (subject) {
+    if (!state.students[name].setechSubs) state.students[name].setechSubs=[];
+    const keySubject = String(subject).trim();
+    const existing = state.students[name].setechSubs.find(s => s.subject===keySubject);
+    if (existing) existing.text += cleanText+'\n';
+    else state.students[name].setechSubs.push({ subject:keySubject, text:cleanText+'\n', year:year||'', sem:sem||'' });
+  }
+  return true;
+}
+
+function parseSetechText(fullText, filename, rows, silent) {
+  const knownNames = Object.keys(state.students).filter(isLikelyName);
+  let parsedCount = 0;
+  const sourceRows = rows || String(fullText||'').split('\n').map(l=>l.split(/\t| {2,}/).map(s=>s.trim()));
+
+  // 행 단위 복구: 이름 셀 + 가장 긴 본문 셀 조합
+  sourceRows.forEach(row => {
+    const cells=row.map(c=>String(c||'').trim()).filter(Boolean);
+    if (!cells.length) return;
+    const name = cells.find(c => knownNames.includes(c)) || cells.find(isLikelyName);
+    if (!name) return;
+    const num = cells.find(c => /^\d{1,5}$/.test(c)) || '';
+    const textCell = cells
+      .filter(c => c!==name && c!==num && !/^(성명|이름|학번|학년|학기|교과|과목)$/.test(c.replace(/\s+/g,'')))
+      .sort((a,b)=>b.length-a.length)[0] || '';
+    if (textCell.length >= 20 && addSetechEntry(name, textCell, '', '', '', num)) parsedCount++;
+  });
+
+  // PDF 텍스트 복구: 기존 학생 명단의 이름 위치를 기준으로 구간 분리
+  if (parsedCount === 0 && knownNames.length) {
+    const normalized = String(fullText||'').replace(/\r/g,'\n').replace(/[ \t]+/g,' ');
+    const hits = [];
+    knownNames.forEach(name => {
+      let start = 0;
+      while (true) {
+        const idx = normalized.indexOf(name, start);
+        if (idx < 0) break;
+        hits.push({ name, idx });
+        start = idx + name.length;
+      }
+    });
+    hits.sort((a,b)=>a.idx-b.idx);
+    const firstHitByName = [];
+    hits.forEach(h => {
+      if (!firstHitByName.some(x=>x.name===h.name)) firstHitByName.push(h);
+    });
+    firstHitByName.sort((a,b)=>a.idx-b.idx);
+    firstHitByName.forEach((h, i) => {
+      const next = firstHitByName[i+1]?.idx ?? normalized.length;
+      let chunk = normalized.slice(h.idx + h.name.length, next);
+      chunk = chunk
+        .replace(/^(?:\d{1,5}\s*)?[\s:：-]+/,'')
+        .replace(/(세부능력\s*및\s*특기사항|세부능력특기사항|특기사항|세특)/g,' ')
+        .trim();
+      if (chunk.length >= 30 && addSetechEntry(h.name, chunk, '', '', '', '')) parsedCount++;
+    });
+  }
+
+  const cnt = Object.keys(state.setechData).length;
+  state.uploadedFiles.setech = { name:filename||'setech.pdf', count:cnt, recovered:true };
+  state.setechParseInfo = {
+    nameCol: '텍스트 복구',
+    textCol: '본문 자동 분리',
+    subjectCol: '미분류',
+    error: parsedCount ? null : '학생명 기준 텍스트 복구 실패',
+    sample: String(fullText||'').slice(0,500),
+    filename
+  };
+  if (parsedCount > 0) {
+    updatePill('pill-setech','세특 '+cnt+'명');
+    updatePill('pill-roster','명단 '+Object.keys(state.students).length+'명');
+    document.getElementById('card-setech').classList.add('done');
+    rebuildList(); updateFileStatus(); saveToStorage();
+    showToast('✅ 세특 로드 완료 · '+cnt+'명 (텍스트 복구)');
+  } else if (!silent) {
+    showToast('⚠️ 세특 파일에서 학생별 본문을 찾지 못했습니다. 먼저 학생 명단/내신/모의 파일을 올린 뒤 다시 시도해주세요.');
+    updateFileStatus(); saveToStorage();
+  }
+  return parsedCount;
 }
 
 // ── ROSTER PARSER ──────────────────────────────
@@ -1417,7 +1556,7 @@ function renderNeis(content, name) {
       html += fb;
     }
 
-    // ② 데이터 구조: eduCat → subject → timeKey → {grade,raw,rank}
+    // ② 데이터 구조: eduCat → subject → timeKey → detailed score
     //    timeKey = "학년학기" 예: "1학년 1학기", "2학년 2학기"
     const catMap = {};
     stu.neisDetail
@@ -1428,7 +1567,14 @@ function renderNeis(content, name) {
         const tKey = yr + d.semester;
         if (!catMap[cat])            catMap[cat] = {};
         if (!catMap[cat][d.subject]) catMap[cat][d.subject] = {};
-        catMap[cat][d.subject][tKey] = { grade: d.grade, raw: d.rawScore||'', rank: d.rank||'' };
+        catMap[cat][d.subject][tKey] = {
+          grade: d.grade,
+          achievement: d.achievement || d.grade || '',
+          raw: d.rawScore || '',
+          avg: d.subjectAvg || '',
+          std: d.stdDev || '',
+          rank: d.rank || ''
+        };
       });
 
     // 모든 timeKey를 순서대로 수집
@@ -1443,34 +1589,26 @@ function renderNeis(content, name) {
     });
 
     // ③ 교과별 섹션 렌더링
-    const legend = hasRaw
-      ? '원점수 · 성취도(A~E) · 석차등급(1~9)'
-      : 'A: 상위20% · B: 20~40% · C: 40~60% · D: 60~80% · E: 하위20%';
+    const legend = '교과학습발달상황의 실제 과목명 기준 · 원점수/과목평균(표준편차)/성취도/석차등급 표시';
 
     // 향상/하락 집계용
     let totalImproved=0, totalDeclined=0, totalMaintained=0;
 
     Object.entries(catMap).forEach(([cat, subjData]) => {
-      // 헤더: 과목명 | timeKey1 | timeKey2 | ...
       const thCols = allTimeKeys.map(tk => {
-        if (hasRaw || hasRank) {
-          return '<th>'+tk+'<br><span style="font-weight:400;font-size:9px">원점수·성취도'+(hasRank?'·등급':'')+'</span></th>';
-        }
-        return '<th>'+tk+'</th>';
+        return '<th>'+tk+'<br><span style="font-weight:400;font-size:9px">원점수/평균/성취도/등급</span></th>';
       }).join('');
 
       const tRows = Object.entries(subjData).map(([subj, timeData]) => {
         const cells = allTimeKeys.map(tk => {
           const d = timeData[tk];
           if (!d) return '<td style="color:var(--text3)">-</td>';
-          if (hasRaw || hasRank) {
-            return '<td style="font-size:11px">'
-              +'<span style="font-family:var(--mono)">'+(d.raw||'-')+'</span> '
-              +'<span class="'+getGradeClass(d.grade||'-')+'">'+(d.grade||'-')+'</span>'
-              +(hasRank?' <span style="font-family:var(--mono);font-size:10px;color:var(--text3)">'+(d.rank||'-')+'</span>':'')
-              +'</td>';
-          }
-          return '<td><span class="'+getGradeClass(d.grade||'-')+'">'+(d.grade||'-')+'</span></td>';
+          return '<td style="font-size:11px;line-height:1.55">'
+            +'<div><span style="font-family:var(--mono);font-weight:600">'+(d.raw||'-')+'</span>'
+            +'<span style="color:var(--text3);font-family:var(--mono)"> / '+(d.avg||'-')+(d.std?' ('+d.std+')':'')+'</span></div>'
+            +'<div><span class="'+getGradeClass(d.achievement||'-')+'">'+(d.achievement||'-')+'</span>'
+            +'<span style="font-family:var(--mono);font-size:10px;color:var(--text3);margin-left:6px">'+(d.rank?d.rank+'등급':'-')+'</span></div>'
+            +'</td>';
         }).join('');
 
         // 추이 (첫 기록 → 최신 기록 비교)
